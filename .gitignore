@@ -1,0 +1,16 @@
+# Flutter/Dart
+.dart_tool/
+.idea/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+build/
+
+# OS/editor
+*.iml
+
+# Secrets
+.env
+android/key.properties
+android/app/upload-keystore.jks

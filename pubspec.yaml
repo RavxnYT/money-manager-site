@@ -1,0 +1,38 @@
+name: money_management_app
+description: Cross-platform money management app with Supabase backend.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  supabase_flutter: ^2.9.1
+  flutter_dotenv: ^5.1.0
+  intl: ^0.20.2
+  http: ^1.2.2
+  shared_preferences: ^2.3.2
+  flutter_local_notifications: ^17.2.2
+  timezone: ^0.9.4
+  app_links: ^6.4.1
+  google_mobile_ads: ^7.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - .env
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "C:/Users/ravxn/.cursor/projects/c-Users-ravxn-OneDrive-Documents-playstore-app-2/assets/c__Users_ravxn_AppData_Roaming_Cursor_User_workspaceStorage_950adc12fcedc83591e53a8f38971ba1_images_download-77a6a1e9-14d4-4647-b54c-9b45a820942d.png"
+  remove_alpha_ios: true
