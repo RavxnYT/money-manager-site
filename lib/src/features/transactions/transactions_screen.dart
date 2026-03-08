@@ -47,7 +47,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   DateTime _transactionDateValue(Map<String, dynamic> row) {
     final raw = row['transaction_date']?.toString();
-    if (raw == null || raw.isEmpty) return DateTime.fromMillisecondsSinceEpoch(0);
+    if (raw == null || raw.isEmpty)
+      return DateTime.fromMillisecondsSinceEpoch(0);
     return DateTime.tryParse(raw) ?? DateTime.fromMillisecondsSinceEpoch(0);
   }
 
@@ -120,7 +121,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               final account = _relationName(row['account']).toLowerCase();
               final category = _relationName(row['categories']).toLowerCase();
               final note = (row['note'] ?? '').toString().toLowerCase();
-              return account.contains(search) || category.contains(search) || note.contains(search);
+              return account.contains(search) ||
+                  category.contains(search) ||
+                  note.contains(search);
             }).toList()
               ..sort((a, b) {
                 final amountA = ((a['amount'] as num?) ?? 0).toDouble();
@@ -171,7 +174,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       ButtonSegment(value: 'transfer', label: Text('Transfer')),
                     ],
                     selected: {_kindFilter},
-                    onSelectionChanged: (set) => setState(() => _kindFilter = set.first),
+                    onSelectionChanged: (set) =>
+                        setState(() => _kindFilter = set.first),
                   ),
                 ),
                 Padding(
@@ -181,8 +185,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     items: const [
                       DropdownMenuItem(value: 'newest', child: Text('Newest')),
                       DropdownMenuItem(value: 'oldest', child: Text('Oldest')),
-                      DropdownMenuItem(value: 'amount_desc', child: Text('Higher to lower')),
-                      DropdownMenuItem(value: 'amount_asc', child: Text('Lower to higher')),
+                      DropdownMenuItem(
+                          value: 'amount_desc', child: Text('Higher to lower')),
+                      DropdownMenuItem(
+                          value: 'amount_asc', child: Text('Lower to higher')),
                     ],
                     onChanged: (value) {
                       if (value == null) return;
@@ -200,90 +206,107 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       ? ListView(
                           children: const [
                             SizedBox(height: 120),
-                            Center(child: Text('No transactions match your filters')),
+                            Center(
+                                child:
+                                    Text('No transactions match your filters')),
                           ],
                         )
                       : ListView.builder(
                           itemCount: filteredRows.length,
-              itemBuilder: (context, index) {
-                final row = filteredRows[index];
-                final amount = ((row['display_amount'] as num?) ?? (row['amount'] as num?) ?? 0).toDouble();
-                final kind = (row['kind'] ?? '') as String;
-                final account = _relationName(row['account']);
-                final accountCurrency = (row['display_currency'] ?? _relationCurrency(row['account'])).toString();
-                final transferAccount = _relationName(row['transfer_account']);
-                final category = _relationName(row['categories']);
-                final date = row['transaction_date']?.toString() ?? '';
-                final subtitle = kind == 'transfer'
-                    ? '$account -> $transferAccount • $date'
-                    : '$account • $category • $date';
-                final isExpense = kind == 'expense';
-                final isIncome = kind == 'income';
-                final amountColor = isIncome
-                    ? const Color(0xFF3BD188)
-                    : isExpense
-                        ? const Color(0xFFFF6B86)
-                        : const Color(0xFF90A4FF);
-                return Dismissible(
-                  key: ValueKey(row['id']),
-                  direction: DismissDirection.endToStart,
-                  background: Container(
-                    color: Colors.red,
-                    alignment: Alignment.centerRight,
-                    padding: const EdgeInsets.only(right: 20),
-                    child: const Icon(Icons.delete, color: Colors.white),
-                  ),
-                  onDismissed: (_) async {
-                    await widget.repository.deleteTransaction(row['id'] as String);
-                    _reload();
-                  },
-                  child: Card(
-                    margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                      leading: Container(
-                        height: 42,
-                        width: 42,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(13),
-                          color: amountColor.withOpacity(0.18),
-                        ),
-                        child: Icon(
-                          isIncome
-                              ? Icons.south_west_rounded
-                              : isExpense
-                                  ? Icons.north_east_rounded
-                                  : Icons.swap_horiz_rounded,
-                          color: amountColor,
-                        ),
-                      ),
-                      title: Text(
-                        formatMoney(amount, currencyCode: accountCurrency),
-                        style: TextStyle(
-                          color: amountColor,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 17,
-                        ),
-                      ),
-                      subtitle: Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(
-                          subtitle,
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                      ),
-                      trailing: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(30),
-                          color: Colors.white.withOpacity(0.08),
-                        ),
-                        child: Text(kind.toUpperCase(), style: const TextStyle(fontSize: 11)),
-                      ),
-                    ),
-                  ),
-                );
-              },
+                          itemBuilder: (context, index) {
+                            final row = filteredRows[index];
+                            final amount = ((row['display_amount'] as num?) ??
+                                    (row['amount'] as num?) ??
+                                    0)
+                                .toDouble();
+                            final kind = (row['kind'] ?? '') as String;
+                            final account = _relationName(row['account']);
+                            final accountCurrency = (row['display_currency'] ??
+                                    _relationCurrency(row['account']))
+                                .toString();
+                            final transferAccount =
+                                _relationName(row['transfer_account']);
+                            final category = _relationName(row['categories']);
+                            final date =
+                                row['transaction_date']?.toString() ?? '';
+                            final subtitle = kind == 'transfer'
+                                ? '$account -> $transferAccount • $date'
+                                : '$account • $category • $date';
+                            final isExpense = kind == 'expense';
+                            final isIncome = kind == 'income';
+                            final amountColor = isIncome
+                                ? const Color(0xFF3BD188)
+                                : isExpense
+                                    ? const Color(0xFFFF6B86)
+                                    : const Color(0xFF90A4FF);
+                            return Dismissible(
+                              key: ValueKey(row['id']),
+                              direction: DismissDirection.endToStart,
+                              background: Container(
+                                color: Colors.red,
+                                alignment: Alignment.centerRight,
+                                padding: const EdgeInsets.only(right: 20),
+                                child: const Icon(Icons.delete,
+                                    color: Colors.white),
+                              ),
+                              onDismissed: (_) async {
+                                await widget.repository
+                                    .deleteTransaction(row['id'] as String);
+                                _reload();
+                              },
+                              child: Card(
+                                margin: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 7),
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 14, vertical: 6),
+                                  leading: Container(
+                                    height: 42,
+                                    width: 42,
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(13),
+                                      color: amountColor.withOpacity(0.18),
+                                    ),
+                                    child: Icon(
+                                      isIncome
+                                          ? Icons.south_west_rounded
+                                          : isExpense
+                                              ? Icons.north_east_rounded
+                                              : Icons.swap_horiz_rounded,
+                                      color: amountColor,
+                                    ),
+                                  ),
+                                  title: Text(
+                                    formatMoney(amount,
+                                        currencyCode: accountCurrency),
+                                    style: TextStyle(
+                                      color: amountColor,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 17,
+                                    ),
+                                  ),
+                                  subtitle: Padding(
+                                    padding: const EdgeInsets.only(top: 3),
+                                    child: Text(
+                                      subtitle,
+                                      style: const TextStyle(
+                                          color: Colors.white70),
+                                    ),
+                                  ),
+                                  trailing: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(30),
+                                      color: Colors.white.withOpacity(0.08),
+                                    ),
+                                    child: Text(kind.toUpperCase(),
+                                        style: const TextStyle(fontSize: 11)),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
                         ),
                 ),
               ],
@@ -295,7 +318,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         onPressed: () async {
           final created = await showDialog<bool>(
             context: context,
-            builder: (context) => _CreateTransactionDialog(repository: widget.repository),
+            builder: (context) =>
+                _CreateTransactionDialog(repository: widget.repository),
           );
           if (created == true) _reload();
         },
@@ -312,7 +336,8 @@ class _CreateTransactionDialog extends StatefulWidget {
   final AppRepository repository;
 
   @override
-  State<_CreateTransactionDialog> createState() => _CreateTransactionDialogState();
+  State<_CreateTransactionDialog> createState() =>
+      _CreateTransactionDialogState();
 }
 
 class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
@@ -383,14 +408,17 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
   Future<void> _load() async {
     final accounts = await widget.repository.fetchAccounts();
     final categories = await widget.repository.fetchCategories(_kind);
-    final defaultCurrency = (await widget.repository.fetchUserCurrencyCode()).toUpperCase();
+    final defaultCurrency =
+        (await widget.repository.fetchUserCurrencyCode()).toUpperCase();
     if (!mounted) return;
     setState(() {
       _accounts = accounts;
       _categories = categories;
       _accountId = accounts.isNotEmpty ? accounts.first['id'].toString() : null;
-      _categoryId = categories.isNotEmpty ? categories.first['id'].toString() : null;
-      _transferAccountId = accounts.length > 1 ? accounts[1]['id'].toString() : null;
+      _categoryId =
+          categories.isNotEmpty ? categories.first['id'].toString() : null;
+      _transferAccountId =
+          accounts.length > 1 ? accounts[1]['id'].toString() : null;
       _entryCurrency = defaultCurrency;
     });
     await _refreshConversionPreview();
@@ -471,7 +499,8 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
     }
     if (_kind == 'transfer' && _transferAccountId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select transfer destination account.')),
+        const SnackBar(
+            content: Text('Please select transfer destination account.')),
       );
       return;
     }
@@ -496,7 +525,9 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
         kind: _kind,
         amount: convertedAmount,
         transactionDate: _date,
-        note: _noteController.text.trim().isEmpty ? null : _noteController.text.trim(),
+        note: _noteController.text.trim().isEmpty
+            ? null
+            : _noteController.text.trim(),
         transferAccountId: _kind == 'transfer' ? _transferAccountId : null,
       );
       if (mounted) Navigator.pop(context, true);
@@ -530,10 +561,12 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
               children: [
                 DropdownButtonFormField<String>(
                   value: _kind,
+                  isExpanded: true,
                   items: const [
                     DropdownMenuItem(value: 'expense', child: Text('Expense')),
                     DropdownMenuItem(value: 'income', child: Text('Income')),
-                    DropdownMenuItem(value: 'transfer', child: Text('Transfer')),
+                    DropdownMenuItem(
+                        value: 'transfer', child: Text('Transfer')),
                   ],
                   onChanged: (value) async {
                     if (value == null) return;
@@ -544,13 +577,16 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                     setState(() {
                       _kind = value;
                       _categories = categories;
-                      _categoryId = categories.isNotEmpty ? categories.first['id'].toString() : null;
+                      _categoryId = categories.isNotEmpty
+                          ? categories.first['id'].toString()
+                          : null;
                     });
                   },
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<String>(
                   value: _safeSelectedValue(_accountId, uniqueAccounts),
+                  isExpanded: true,
                   items: uniqueAccounts
                       .map((e) => DropdownMenuItem<String>(
                             value: e['id'].toString(),
@@ -569,6 +605,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                 if (_kind != 'transfer')
                   DropdownButtonFormField<String>(
                     value: _safeSelectedValue(_categoryId, uniqueCategories),
+                    isExpanded: true,
                     items: uniqueCategories
                         .map((e) => DropdownMenuItem<String>(
                               value: e['id'].toString(),
@@ -580,47 +617,61 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                   ),
                 if (_kind == 'transfer')
                   DropdownButtonFormField<String>(
-                    value: _safeSelectedValue(_transferAccountId, transferAccounts),
+                    value: _safeSelectedValue(
+                        _transferAccountId, transferAccounts),
+                    isExpanded: true,
                     items: transferAccounts
                         .map((e) => DropdownMenuItem<String>(
                               value: e['id'].toString(),
-                              child: Text('To: ${(e['name'] ?? '').toString()}'),
+                              child:
+                                  Text('To: ${(e['name'] ?? '').toString()}'),
                             ))
                         .toList(),
-                    onChanged: (value) => setState(() => _transferAccountId = value),
+                    onChanged: (value) =>
+                        setState(() => _transferAccountId = value),
                     decoration: const InputDecoration(labelText: 'Transfer To'),
                   ),
                 const SizedBox(height: 10),
                 TextFormField(
                   controller: _amountController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
                   decoration: const InputDecoration(labelText: 'Amount'),
                   onChanged: (_) => _refreshConversionPreview(),
                   validator: (value) {
                     final parsed = _parseAmountInput(value);
-                    if (parsed == null || parsed <= 0) return 'Enter valid amount';
+                    if (parsed == null || parsed <= 0)
+                      return 'Enter valid amount';
                     return null;
                   },
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<String>(
-                  value: supportedCurrencyCodes.contains(_entryCurrency) ? _entryCurrency : 'USD',
+                  value: supportedCurrencyCodes.contains(_entryCurrency)
+                      ? _entryCurrency
+                      : 'USD',
+                  isExpanded: true,
                   items: supportedCurrencyCodes
-                      .map((code) => DropdownMenuItem<String>(value: code, child: Text(code)))
+                      .map((code) => DropdownMenuItem<String>(
+                          value: code, child: Text(code)))
                       .toList(),
                   onChanged: (value) {
                     if (value == null) return;
                     setState(() => _entryCurrency = value);
                     _refreshConversionPreview();
                   },
-                  decoration: const InputDecoration(labelText: 'Entered amount currency'),
+                  decoration: const InputDecoration(
+                      labelText: 'Entered amount currency'),
                 ),
                 const SizedBox(height: 6),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
                     'Saved in ${_accountCurrencyById(_accountId) ?? _entryCurrency}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white70),
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(color: Colors.white70),
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -652,7 +703,8 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                 const SizedBox(height: 10),
                 TextFormField(
                   controller: _noteController,
-                  decoration: const InputDecoration(labelText: 'Note (optional)'),
+                  decoration:
+                      const InputDecoration(labelText: 'Note (optional)'),
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -679,7 +731,9 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: _loading ? null : () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(
+            onPressed: _loading ? null : () => Navigator.pop(context),
+            child: const Text('Cancel')),
         FilledButton(
           onPressed: _loading ? null : _save,
           child: Text(_loading ? 'Saving...' : 'Save'),

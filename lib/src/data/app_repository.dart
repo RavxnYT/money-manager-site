@@ -11,7 +11,8 @@ class AppRepository {
   AppRepository(this._client);
 
   final SupabaseClient _client;
-  static const _globalConversionEnabledKey = 'global_currency_conversion_enabled';
+  static const _globalConversionEnabledKey =
+      'global_currency_conversion_enabled';
   static const _pendingOpsKeyPrefix = 'offline_pending_ops';
   static const _cacheKeyPrefix = 'offline_cache';
   static const _syncThrottle = Duration(seconds: 8);
@@ -138,19 +139,22 @@ class AppRepository {
 
   String _transactionsMonthCacheKey(DateTime month) {
     final normalized = DateTime(month.year, month.month, 1);
-    final monthKey = '${normalized.year}-${normalized.month.toString().padLeft(2, '0')}';
+    final monthKey =
+        '${normalized.year}-${normalized.month.toString().padLeft(2, '0')}';
     return _cacheKey('transactions_month:$monthKey');
   }
 
   String _budgetsMonthCacheKey(DateTime monthStart) {
     final normalized = DateTime(monthStart.year, monthStart.month, 1);
-    final monthKey = '${normalized.year}-${normalized.month.toString().padLeft(2, '0')}';
+    final monthKey =
+        '${normalized.year}-${normalized.month.toString().padLeft(2, '0')}';
     return _cacheKey('budgets_month:$monthKey');
   }
 
   bool _isLocalId(String? id) => id != null && id.startsWith('local-');
 
-  String _newLocalId(String prefix) => 'local-$prefix-${DateTime.now().microsecondsSinceEpoch}';
+  String _newLocalId(String prefix) =>
+      'local-$prefix-${DateTime.now().microsecondsSinceEpoch}';
 
   bool _isNetworkError(Object error) {
     if (error is SocketException || error is TimeoutException) {
@@ -183,7 +187,8 @@ class AppRepository {
     await prefs.setString(_scopedKey(_pendingOpsKeyPrefix), encoded);
   }
 
-  Future<void> _enqueueOperation(String type, Map<String, dynamic> payload) async {
+  Future<void> _enqueueOperation(
+      String type, Map<String, dynamic> payload) async {
     final ops = await _loadPendingOperations();
     ops.add(
       _PendingOperation(
@@ -196,7 +201,8 @@ class AppRepository {
     await _savePendingOperations(ops);
   }
 
-  Future<void> _removePendingWhere(bool Function(_PendingOperation op) predicate) async {
+  Future<void> _removePendingWhere(
+      bool Function(_PendingOperation op) predicate) async {
     final ops = await _loadPendingOperations();
     ops.removeWhere(predicate);
     await _savePendingOperations(ops);
@@ -214,7 +220,8 @@ class AppRepository {
         .toList();
   }
 
-  Future<void> _writeCachedList(String key, List<Map<String, dynamic>> value) async {
+  Future<void> _writeCachedList(
+      String key, List<Map<String, dynamic>> value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(key, jsonEncode(value));
   }
@@ -244,7 +251,8 @@ class AppRepository {
     if (userId == null) return;
     final keys = prefs.getKeys();
     for (final key in keys) {
-      final scopedCache = key.startsWith('$_cacheKeyPrefix:') && key.endsWith('_$userId');
+      final scopedCache =
+          key.startsWith('$_cacheKeyPrefix:') && key.endsWith('_$userId');
       final scopedPending = key == '${_pendingOpsKeyPrefix}_$userId';
       if (scopedCache || scopedPending) {
         await prefs.remove(key);
@@ -304,11 +312,13 @@ class AppRepository {
               cacheChanged = true;
               break;
             case _opCreateAccount:
-              final resolved = await _resolveAccountPayload(payload, accountIdMap);
+              final resolved =
+                  await _resolveAccountPayload(payload, accountIdMap);
               final insertedId = await _createAccountRemote(
                 name: (resolved['name'] ?? '').toString(),
                 type: (resolved['type'] ?? 'cash').toString(),
-                openingBalance: ((resolved['opening_balance'] as num?) ?? 0).toDouble(),
+                openingBalance:
+                    ((resolved['opening_balance'] as num?) ?? 0).toDouble(),
                 currencyCode: (resolved['currency_code'] ?? 'USD').toString(),
               );
               final localId = payload['local_id']?.toString();
@@ -318,7 +328,8 @@ class AppRepository {
               cacheChanged = true;
               break;
             case _opUpdateAccount:
-              final resolved = await _resolveAccountPayload(payload, accountIdMap);
+              final resolved =
+                  await _resolveAccountPayload(payload, accountIdMap);
               await _updateAccountRemote(
                 accountId: (resolved['account_id'] ?? '').toString(),
                 name: (resolved['name'] ?? '').toString(),
@@ -328,8 +339,10 @@ class AppRepository {
               cacheChanged = true;
               break;
             case _opDeleteAccount:
-              final resolved = await _resolveAccountPayload(payload, accountIdMap);
-              await _deleteAccountRemote(accountId: (resolved['account_id'] ?? '').toString());
+              final resolved =
+                  await _resolveAccountPayload(payload, accountIdMap);
+              await _deleteAccountRemote(
+                  accountId: (resolved['account_id'] ?? '').toString());
               cacheChanged = true;
               break;
             case _opCreateCategory:
@@ -344,7 +357,8 @@ class AppRepository {
               cacheChanged = true;
               break;
             case _opUpdateCategory:
-              final resolved = await _resolveCategoryPayload(payload, categoryIdMap);
+              final resolved =
+                  await _resolveCategoryPayload(payload, categoryIdMap);
               await _updateCategoryRemote(
                 categoryId: (resolved['category_id'] ?? '').toString(),
                 name: (resolved['name'] ?? '').toString(),
@@ -352,8 +366,10 @@ class AppRepository {
               cacheChanged = true;
               break;
             case _opDeleteCategory:
-              final resolved = await _resolveCategoryPayload(payload, categoryIdMap);
-              await _deleteCategoryRemote(categoryId: (resolved['category_id'] ?? '').toString());
+              final resolved =
+                  await _resolveCategoryPayload(payload, categoryIdMap);
+              await _deleteCategoryRemote(
+                  categoryId: (resolved['category_id'] ?? '').toString());
               cacheChanged = true;
               break;
             case _opCreateTransaction:
@@ -372,7 +388,9 @@ class AppRepository {
                 kind: (resolved['kind'] ?? 'expense').toString(),
                 amount: ((resolved['amount'] as num?) ?? 0).toDouble(),
                 transactionDate: DateTime.parse(
-                  (resolved['transaction_date'] ?? DateTime.now().toIso8601String()).toString(),
+                  (resolved['transaction_date'] ??
+                          DateTime.now().toIso8601String())
+                      .toString(),
                 ),
                 note: resolved['note']?.toString(),
                 transferAccountId: resolved['transfer_account_id']?.toString(),
@@ -391,7 +409,8 @@ class AppRepository {
             case _opCreateSavingsGoal:
               final insertedId = await _createSavingsGoalRemote(
                 name: (payload['name'] ?? '').toString(),
-                targetAmount: ((payload['target_amount'] as num?) ?? 0).toDouble(),
+                targetAmount:
+                    ((payload['target_amount'] as num?) ?? 0).toDouble(),
                 targetDate: payload['target_date'] == null
                     ? null
                     : DateTime.tryParse(payload['target_date'].toString()),
@@ -421,7 +440,8 @@ class AppRepository {
               cacheChanged = true;
               break;
             case _opUpsertBudget:
-              final resolved = await _resolveCategoryPayload(payload, categoryIdMap);
+              final resolved =
+                  await _resolveCategoryPayload(payload, categoryIdMap);
               if (_containsUnresolvedLocalRef(resolved)) {
                 remaining.add(op);
                 continue;
@@ -429,21 +449,25 @@ class AppRepository {
               await _upsertBudgetRemote(
                 categoryId: (resolved['category_id'] ?? '').toString(),
                 monthStart: DateTime.parse(
-                  (resolved['month_start'] ?? DateTime.now().toIso8601String()).toString(),
+                  (resolved['month_start'] ?? DateTime.now().toIso8601String())
+                      .toString(),
                 ),
-                amountLimit: ((resolved['amount_limit'] as num?) ?? 0).toDouble(),
+                amountLimit:
+                    ((resolved['amount_limit'] as num?) ?? 0).toDouble(),
               );
               cacheChanged = true;
               break;
             case _opExchangeAccountCurrency:
-              final resolved = await _resolveAccountPayload(payload, accountIdMap);
+              final resolved =
+                  await _resolveAccountPayload(payload, accountIdMap);
               if (_containsUnresolvedLocalRef(resolved)) {
                 remaining.add(op);
                 continue;
               }
               await _exchangeAccountCurrencyRemote(
                 accountId: (resolved['account_id'] ?? '').toString(),
-                targetCurrency: (resolved['target_currency'] ?? 'USD').toString(),
+                targetCurrency:
+                    (resolved['target_currency'] ?? 'USD').toString(),
                 rate: ((resolved['rate'] as num?) ?? 1).toDouble(),
               );
               cacheChanged = true;
@@ -456,7 +480,6 @@ class AppRepository {
             remaining.addAll(pending.sublist(index));
             break;
           }
-          // Keep invalid/failed operations to avoid data loss.
           remaining.add(op);
         }
       }
@@ -492,7 +515,8 @@ class AppRepository {
       data['account_id'] = accountMap[accountId];
     }
     final transferAccountId = data['transfer_account_id']?.toString();
-    if (_isLocalId(transferAccountId) && accountMap.containsKey(transferAccountId)) {
+    if (_isLocalId(transferAccountId) &&
+        accountMap.containsKey(transferAccountId)) {
       data['transfer_account_id'] = accountMap[transferAccountId];
     }
     return data;
@@ -605,7 +629,8 @@ class AppRepository {
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
       await _enqueueOperation(_opUpdateUserCurrency, payload);
-      final cached = await _readCachedMap(_cacheKey('profile')) ?? <String, dynamic>{};
+      final cached =
+          await _readCachedMap(_cacheKey('profile')) ?? <String, dynamic>{};
       cached['currency_code'] = currencyCode;
       cached['has_selected_currency'] = true;
       await _writeCachedMap(_cacheKey('profile'), cached);
@@ -875,7 +900,7 @@ class AppRepository {
       try {
         await createCategory(name: name, type: type);
       } catch (_) {
-        // Ignore duplicates/temporary failures to keep seed best-effort.
+        continue;
       }
     }
   }
@@ -902,7 +927,8 @@ class AppRepository {
         'type': type,
         'is_archived': false,
       });
-      cached.sort((a, b) => (a['name'] ?? '').toString().compareTo((b['name'] ?? '').toString()));
+      cached.sort((a, b) =>
+          (a['name'] ?? '').toString().compareTo((b['name'] ?? '').toString()));
       await _writeCachedList(_cacheKey('categories:$type'), cached);
     }
   }
@@ -949,7 +975,9 @@ class AppRepository {
           }
         }
         if (changed) {
-          cached.sort((a, b) => (a['name'] ?? '').toString().compareTo((b['name'] ?? '').toString()));
+          cached.sort((a, b) => (a['name'] ?? '')
+              .toString()
+              .compareTo((b['name'] ?? '').toString()));
           await _writeCachedList(_cacheKey('categories:$type'), cached);
         }
       }
@@ -1041,7 +1069,8 @@ class AppRepository {
     }
   }
 
-  Future<List<Map<String, dynamic>>> fetchTransactionsForMonth(DateTime month) async {
+  Future<List<Map<String, dynamic>>> fetchTransactionsForMonth(
+      DateTime month) async {
     final user = currentUser;
     if (user == null) return [];
     await _syncPendingOperationsIfNeeded();
@@ -1112,8 +1141,10 @@ class AppRepository {
       });
       final cached = await _readCachedList(_cacheKey('transactions'));
       final accounts = await _readCachedList(_cacheKey('accounts'));
-      final categoriesExpense = await _readCachedList(_cacheKey('categories:expense'));
-      final categoriesIncome = await _readCachedList(_cacheKey('categories:income'));
+      final categoriesExpense =
+          await _readCachedList(_cacheKey('categories:expense'));
+      final categoriesIncome =
+          await _readCachedList(_cacheKey('categories:income'));
       Map<String, dynamic>? account;
       Map<String, dynamic>? transferAccount;
       Map<String, dynamic>? category;
@@ -1147,7 +1178,8 @@ class AppRepository {
             ? null
             : {
                 'name': (transferAccount['name'] ?? '').toString(),
-                'currency_code': (transferAccount['currency_code'] ?? 'USD').toString(),
+                'currency_code':
+                    (transferAccount['currency_code'] ?? 'USD').toString(),
               },
         'categories': category == null
             ? null
@@ -1204,7 +1236,8 @@ class AppRepository {
       await _removeCachedKey(_cacheKey('transactions'));
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opDeleteTransaction, {'transaction_id': transactionId});
+      await _enqueueOperation(
+          _opDeleteTransaction, {'transaction_id': transactionId});
       final cached = await _readCachedList(_cacheKey('transactions'));
       cached.removeWhere((row) => row['id']?.toString() == transactionId);
       await _writeCachedList(_cacheKey('transactions'), cached);
@@ -1331,7 +1364,8 @@ class AppRepository {
         }
       }
       await _writeCachedList(_cacheKey('savings_goals'), goals);
-      final contributions = await _readCachedList(_cacheKey('savings_goal_contributions'));
+      final contributions =
+          await _readCachedList(_cacheKey('savings_goal_contributions'));
       contributions.insert(0, {
         'id': _newLocalId('contribution'),
         'goal_id': goalId,
@@ -1339,7 +1373,8 @@ class AppRepository {
         'note': note,
         'created_at': DateTime.now().toIso8601String(),
       });
-      await _writeCachedList(_cacheKey('savings_goal_contributions'), contributions);
+      await _writeCachedList(
+          _cacheKey('savings_goal_contributions'), contributions);
     }
   }
 
@@ -1401,7 +1436,8 @@ class AppRepository {
     });
   }
 
-  Future<List<Map<String, dynamic>>> fetchBudgetsForMonth(DateTime monthStart) async {
+  Future<List<Map<String, dynamic>>> fetchBudgetsForMonth(
+      DateTime monthStart) async {
     final user = currentUser;
     if (user == null) return [];
     await _syncPendingOperationsIfNeeded();
@@ -1528,7 +1564,8 @@ class AppRepository {
       params: {
         'p_user_id': user.id,
         'p_bill_id': billId,
-        'p_paid_on': (paidOn ?? DateTime.now()).toIso8601String().split('T').first,
+        'p_paid_on':
+            (paidOn ?? DateTime.now()).toIso8601String().split('T').first,
       },
     );
   }
@@ -1658,7 +1695,8 @@ class _PendingOperation {
     return _PendingOperation(
       id: (json['id'] ?? '').toString(),
       type: (json['type'] ?? '').toString(),
-      payload: Map<String, dynamic>.from((json['payload'] as Map?) ?? <String, dynamic>{}),
+      payload: Map<String, dynamic>.from(
+          (json['payload'] as Map?) ?? <String, dynamic>{}),
       createdAtIso: (json['created_at'] ?? '').toString(),
     );
   }

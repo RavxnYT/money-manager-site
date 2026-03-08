@@ -23,8 +23,6 @@ class ExchangeRateService {
     if (fromRate == null || fromRate <= 0 || toRate == null || toRate <= 0) {
       throw Exception('Exchange rate not available for $from->$to');
     }
-    // Open Exchange Rates free plan uses USD base.
-    // Convert between arbitrary currencies via USD cross-rate.
     return toRate / fromRate;
   }
 
@@ -40,7 +38,8 @@ class ExchangeRateService {
       final cachedAt = DateTime.fromMillisecondsSinceEpoch(cachedTs);
       if (DateTime.now().difference(cachedAt) < cacheTtl) {
         final map = jsonDecode(cachedJson) as Map<String, dynamic>;
-        return map.map((k, v) => MapEntry(k.toUpperCase(), (v as num).toDouble()));
+        return map
+            .map((k, v) => MapEntry(k.toUpperCase(), (v as num).toDouble()));
       }
     }
 
@@ -64,12 +63,12 @@ class ExchangeRateService {
       throw Exception('Invalid exchange rate response');
     }
 
-    // Ensure USD is always present for cross-rate conversion.
     rates['USD'] = 1.0;
 
     await prefs.setInt(tsKey, DateTime.now().millisecondsSinceEpoch);
     await prefs.setString(jsonKey, jsonEncode(rates));
-    final normalized = rates.map((k, v) => MapEntry(k.toUpperCase(), (v as num).toDouble()));
+    final normalized =
+        rates.map((k, v) => MapEntry(k.toUpperCase(), (v as num).toDouble()));
     if (normalized.containsKey('USD')) {
       return normalized;
     }
@@ -81,8 +80,10 @@ class ExchangeRateService {
     final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
     final requestsPerDayRaw = (_monthlyRequestQuota / daysInMonth).floor();
     final requestsPerDay = requestsPerDayRaw < 1 ? 1 : requestsPerDayRaw;
-    final intervalMinutesRaw = (Duration.minutesPerDay / requestsPerDay).floor();
-    final intervalMinutes = (intervalMinutesRaw.clamp(1, Duration.minutesPerDay) as int);
+    final intervalMinutesRaw =
+        (Duration.minutesPerDay / requestsPerDay).floor();
+    final intervalMinutes =
+        (intervalMinutesRaw.clamp(1, Duration.minutesPerDay) as int);
     return Duration(minutes: intervalMinutes);
   }
 

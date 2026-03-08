@@ -6,9 +6,9 @@ class SupportRewardedAdService {
 
   static final SupportRewardedAdService instance = SupportRewardedAdService._();
 
-  // Google test rewarded ad unit id for debug builds.
   static const _testRewardedAdUnitId = 'ca-app-pub-3940256099942544/5224354917';
-  static const _androidRewardedAdUnitId = 'ca-app-pub-7145004668953814/5622127496';
+  static const _androidRewardedAdUnitId =
+      'ca-app-pub-7145004668953814/5622127496';
 
   RewardedAd? _rewardedAd;
   bool _isLoading = false;
