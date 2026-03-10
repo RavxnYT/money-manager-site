@@ -19,6 +19,11 @@ class SupportRewardedAdService {
   }
 
   Future<void> load() async {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      return;
+    }
     if (_isLoading || _rewardedAd != null) return;
     _isLoading = true;
     await RewardedAd.load(
@@ -42,6 +47,12 @@ class SupportRewardedAdService {
     required VoidCallback onNotReady,
     required void Function(String message) onFailedToShow,
   }) async {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      onFailedToShow('Support ads are only available on mobile devices.');
+      return;
+    }
     final ad = _rewardedAd;
     if (ad == null) {
       onNotReady();

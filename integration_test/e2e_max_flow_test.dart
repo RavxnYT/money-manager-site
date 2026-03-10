@@ -37,10 +37,18 @@ void main() {
 
     await ensureOnTab(tester, 'Dashboard');
 
+    // Ensure at least one account exists before adding transactions.
+    await ensureOnTab(tester, 'Settings');
+    await pumpAndSettleLong(tester);
+    await _exerciseAccountsFlow(tester);
+    await ensureOnTab(tester, 'Dashboard');
+    await pumpAndSettleLong(tester);
+
     await _runTransactionsFlow(tester);
     await _runTransactionsFlow(tester, includeTransfer: true);
     await _runReportsFlow(tester);
     await _runSavingsFlow(tester);
+    await _runLoansFlow(tester);
     await _runSettingsDeepFlow(tester);
     await _runDetachedPowerFlows(tester);
     await _runCrossTabStabilityPass(tester);
@@ -323,6 +331,50 @@ Future<void> _runSavingsFlow(WidgetTester tester) async {
   }
 }
 
+Future<void> _runLoansFlow(WidgetTester tester) async {
+  try {
+    await ensureOnTab(tester, 'Loans');
+    await pumpAndSettleLong(tester);
+
+    final seed = Random().nextInt(100000);
+    final opened = await tapTextIfPresent(tester, 'Add loan');
+    if (!opened) return;
+    if (find.text('Add Loan').evaluate().isEmpty) return;
+
+    await enterTextIfFieldPresent(
+      tester,
+      label: 'Person name',
+      value: 'E2E Loan Friend $seed',
+    );
+    await enterTextIfFieldPresent(
+      tester,
+      label: 'Total amount',
+      value: '150',
+    );
+    await tapTextIfPresent(tester, 'Save');
+    await tester.pumpAndSettle(const Duration(seconds: 2));
+
+    final tapped = await tapTextIfPresent(tester, 'Record payment');
+    if (tapped &&
+        find.textContaining('Record payment').evaluate().isNotEmpty) {
+      await enterTextIfFieldPresent(
+        tester,
+        label: 'Amount',
+        value: '50',
+      );
+      await enterTextIfFieldPresent(
+        tester,
+        label: 'Note (optional)',
+        value: 'E2E loan payment',
+      );
+      await tapTextIfPresent(tester, 'Add payment');
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+    }
+  } catch (_) {
+    // Ignore environments where the Loans flow cannot be fully exercised (e.g. desktop semantics quirks).
+  }
+}
+
 Future<void> _runSettingsDeepFlow(WidgetTester tester) async {
   await ensureOnTab(tester, 'Settings');
   await pumpAndSettleLong(tester);
@@ -593,6 +645,7 @@ Future<void> _runCrossTabStabilityPass(WidgetTester tester) async {
   await _tryEnsureOnTab(tester, 'Transactions');
   await _tryEnsureOnTab(tester, 'Reports');
   await _tryEnsureOnTab(tester, 'Savings');
+  await _tryEnsureOnTab(tester, 'Loans');
   await _tryEnsureOnTab(tester, 'Settings');
   await _tryEnsureOnTab(tester, 'Dashboard');
 }

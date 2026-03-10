@@ -127,6 +127,8 @@ IconData? _tabIconForLabel(String label) {
       return Icons.insights;
     case 'Savings':
       return Icons.savings;
+    case 'Loans':
+      return Icons.people;
     case 'Settings':
       return Icons.settings;
     default:

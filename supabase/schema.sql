@@ -130,6 +130,31 @@ create table if not exists public.savings_goal_contributions (
 );
 create index if not exists idx_savings_contrib_user_goal on public.savings_goal_contributions(user_id, goal_id, created_at desc);
 
+create table if not exists public.loans (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  person_name text not null,
+  total_amount numeric(14, 2) not null check (total_amount > 0),
+  currency_code text not null default 'USD',
+  direction text not null check (direction in ('owed_to_me', 'owed_by_me')),
+  note text,
+  due_date date,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_loans_user on public.loans(user_id);
+
+create table if not exists public.loan_payments (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  loan_id uuid not null references public.loans(id) on delete cascade,
+  amount numeric(14, 2) not null check (amount > 0),
+  payment_date date not null default current_date,
+  note text,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_loan_payments_loan on public.loan_payments(loan_id, payment_date desc);
+
 create table if not exists public.support_events (
   id uuid primary key default uuid_generate_v4(),
   user_id uuid not null references public.profiles(id) on delete cascade,
@@ -170,6 +195,11 @@ for each row execute function public.handle_updated_at();
 drop trigger if exists trg_bills_updated_at on public.bill_reminders;
 create trigger trg_bills_updated_at
 before update on public.bill_reminders
+for each row execute function public.handle_updated_at();
+
+drop trigger if exists trg_loans_updated_at on public.loans;
+create trigger trg_loans_updated_at
+before update on public.loans
 for each row execute function public.handle_updated_at();
 
 create or replace function public.seed_default_categories(p_user_id uuid)
@@ -565,6 +595,8 @@ begin
     raise exception 'Unauthorized';
   end if;
 
+  delete from public.loan_payments where user_id = p_user_id;
+  delete from public.loans where user_id = p_user_id;
   delete from public.savings_goal_contributions where user_id = p_user_id;
   delete from public.transactions where user_id = p_user_id;
   delete from public.budgets where user_id = p_user_id;
@@ -638,6 +670,8 @@ alter table public.savings_goals enable row level security;
 alter table public.recurring_transactions enable row level security;
 alter table public.bill_reminders enable row level security;
 alter table public.savings_goal_contributions enable row level security;
+alter table public.loans enable row level security;
+alter table public.loan_payments enable row level security;
 alter table public.support_events enable row level security;
 
 drop policy if exists profiles_select_own on public.profiles;
@@ -680,6 +714,14 @@ for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 drop policy if exists savings_contrib_own_all on public.savings_goal_contributions;
 create policy savings_contrib_own_all on public.savings_goal_contributions
+for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists loans_own_all on public.loans;
+create policy loans_own_all on public.loans
+for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists loan_payments_own_all on public.loan_payments;
+create policy loan_payments_own_all on public.loan_payments
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 drop policy if exists support_events_own_all on public.support_events;

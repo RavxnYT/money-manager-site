@@ -19,6 +19,7 @@ dependencies:
   timezone: ^0.9.4
   app_links: ^6.4.1
   google_mobile_ads: ^7.0.0
+  connectivity_plus: ^6.1.1
 
 dev_dependencies:
   flutter_test:

@@ -30,6 +30,8 @@ class AppRepository {
   static const _opAddSavingsProgress = 'add_savings_progress';
   static const _opUpsertBudget = 'upsert_budget';
   static const _opExchangeAccountCurrency = 'exchange_account_currency';
+  static const _opCreateLoan = 'create_loan';
+  static const _opAddLoanPayment = 'add_loan_payment';
   static const List<String> _defaultExpenseCategories = [
     'Food',
     'Transport',
@@ -49,6 +51,11 @@ class AppRepository {
 
   bool _isSyncing = false;
   DateTime? _lastSyncAttempt;
+  final StreamController<int> _dataChangeController =
+      StreamController<int>.broadcast();
+  int _dataRevision = 0;
+
+  Stream<int> get dataChanges => _dataChangeController.stream;
 
   User? get currentUser => _client.auth.currentUser;
 
@@ -187,6 +194,11 @@ class AppRepository {
     await prefs.setString(_scopedKey(_pendingOpsKeyPrefix), encoded);
   }
 
+  Future<int> pendingOperationsCount() async {
+    final ops = await _loadPendingOperations();
+    return ops.length;
+  }
+
   Future<void> _enqueueOperation(
       String type, Map<String, dynamic> payload) async {
     final ops = await _loadPendingOperations();
@@ -245,6 +257,21 @@ class AppRepository {
     await prefs.remove(key);
   }
 
+  Future<void> _clearTransactionsMonthCaches() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userId = currentUser?.id;
+    if (userId == null) return;
+    final keys = prefs.getKeys();
+    for (final key in keys) {
+      final isMonthCache =
+          key.startsWith('$_cacheKeyPrefix:transactions_month:') &&
+              key.endsWith('_$userId');
+      if (isMonthCache) {
+        await prefs.remove(key);
+      }
+    }
+  }
+
   Future<void> _clearLocalOfflineState() async {
     final prefs = await SharedPreferences.getInstance();
     final userId = currentUser?.id;
@@ -271,7 +298,14 @@ class AppRepository {
       _removeCachedKey(_cacheKey('transactions')),
       _removeCachedKey(_cacheKey('savings_goals')),
       _removeCachedKey(_cacheKey('savings_goal_contributions')),
+      _removeCachedKey(_cacheKey('loans')),
+      _removeCachedKey(_cacheKey('loan_payments')),
     ]);
+  }
+
+  void _notifyDataChanged() {
+    _dataRevision++;
+    _dataChangeController.add(_dataRevision);
   }
 
   Future<void> _syncPendingOperationsIfNeeded({bool force = false}) async {
@@ -294,6 +328,7 @@ class AppRepository {
     final accountIdMap = <String, String>{};
     final categoryIdMap = <String, String>{};
     final goalIdMap = <String, String>{};
+    final loanIdMap = <String, String>{};
     var cacheChanged = false;
 
     try {
@@ -472,6 +507,48 @@ class AppRepository {
               );
               cacheChanged = true;
               break;
+            case _opCreateLoan:
+              final insertedLoanId = await _createLoanRemote(
+                personName: (payload['person_name'] ?? '').toString(),
+                totalAmount:
+                    ((payload['total_amount'] as num?) ?? 0).toDouble(),
+                direction:
+                    (payload['direction'] ?? 'owed_to_me').toString(),
+                currencyCode:
+                    (payload['currency_code'] ?? 'USD').toString(),
+                note: payload['note']?.toString(),
+                dueDate: payload['due_date'] == null
+                    ? null
+                    : DateTime.tryParse(payload['due_date'].toString()),
+              );
+              final loanLocalId = payload['local_id']?.toString();
+              if (_isLocalId(loanLocalId)) {
+                loanIdMap[loanLocalId!] = insertedLoanId;
+              }
+              cacheChanged = true;
+              break;
+            case _opAddLoanPayment:
+              final resolvedLoan = await _resolveLoanPayload(
+                payload,
+                loanIdMap: loanIdMap,
+              );
+              if (_containsUnresolvedLocalRef(resolvedLoan)) {
+                remaining.add(op);
+                continue;
+              }
+              await _addLoanPaymentRemote(
+                loanId: (resolvedLoan['loan_id'] ?? '').toString(),
+                amount:
+                    ((resolvedLoan['amount'] as num?) ?? 0).toDouble(),
+                paymentDate: DateTime.parse(
+                  (resolvedLoan['payment_date'] ??
+                          DateTime.now().toIso8601String())
+                      .toString(),
+                ),
+                note: resolvedLoan['note']?.toString(),
+              );
+              cacheChanged = true;
+              break;
             default:
               remaining.add(op);
           }
@@ -502,7 +579,8 @@ class AppRepository {
     return isUnresolved(payload['account_id']) ||
         isUnresolved(payload['transfer_account_id']) ||
         isUnresolved(payload['category_id']) ||
-        isUnresolved(payload['goal_id']);
+        isUnresolved(payload['goal_id']) ||
+        isUnresolved(payload['loan_id']);
   }
 
   Future<Map<String, dynamic>> _resolveAccountPayload(
@@ -553,6 +631,18 @@ class AppRepository {
     final goalId = data['goal_id']?.toString();
     if (_isLocalId(goalId) && goalIdMap.containsKey(goalId)) {
       data['goal_id'] = goalIdMap[goalId];
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> _resolveLoanPayload(
+    Map<String, dynamic> payload, {
+    required Map<String, String> loanIdMap,
+  }) async {
+    final data = Map<String, dynamic>.from(payload);
+    final loanId = data['loan_id']?.toString();
+    if (_isLocalId(loanId) && loanIdMap.containsKey(loanId)) {
+      data['loan_id'] = loanIdMap[loanId];
     }
     return data;
   }
@@ -635,6 +725,7 @@ class AppRepository {
       cached['has_selected_currency'] = true;
       await _writeCachedMap(_cacheKey('profile'), cached);
     }
+    _notifyDataChanged();
   }
 
   Future<void> _updateUserCurrencyRemote({
@@ -728,6 +819,7 @@ class AppRepository {
       });
       await _writeCachedList(_cacheKey('accounts'), cached);
     }
+    _notifyDataChanged();
   }
 
   Future<String> _createAccountRemote({
@@ -785,6 +877,7 @@ class AppRepository {
       }
       await _writeCachedList(_cacheKey('accounts'), cached);
     }
+    _notifyDataChanged();
   }
 
   Future<void> _updateAccountRemote({
@@ -822,6 +915,7 @@ class AppRepository {
       final cached = await _readCachedList(_cacheKey('accounts'));
       cached.removeWhere((row) => row['id']?.toString() == accountId);
       await _writeCachedList(_cacheKey('accounts'), cached);
+      _notifyDataChanged();
       return;
     }
     try {
@@ -834,6 +928,7 @@ class AppRepository {
       cached.removeWhere((row) => row['id']?.toString() == accountId);
       await _writeCachedList(_cacheKey('accounts'), cached);
     }
+    _notifyDataChanged();
   }
 
   Future<void> _deleteAccountRemote({
@@ -1100,7 +1195,25 @@ class AppRepository {
       return mapped;
     } catch (error) {
       if (_isNetworkError(error)) {
-        return _readCachedList(key);
+        final cachedMonth = await _readCachedList(key);
+        if (cachedMonth.isNotEmpty) {
+          return cachedMonth;
+        }
+        final allCached = await _readCachedList(_cacheKey('transactions'));
+        if (allCached.isEmpty) {
+          return [];
+        }
+        final filtered = allCached.where((row) {
+          final raw = (row['transaction_date'] ?? '').toString();
+          final parsed = DateTime.tryParse(raw);
+          if (parsed == null) return false;
+          return !parsed.isBefore(start) && parsed.isBefore(end);
+        }).toList()
+          ..sort((a, b) => (b['transaction_date'] ?? '')
+              .toString()
+              .compareTo((a['transaction_date'] ?? '').toString()));
+        await _writeCachedList(key, filtered);
+        return filtered;
       }
       rethrow;
     }
@@ -1127,6 +1240,7 @@ class AppRepository {
         transferAccountId: transferAccountId,
       );
       await _removeCachedKey(_cacheKey('transactions'));
+      await _clearTransactionsMonthCaches();
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
       await _enqueueOperation(_opCreateTransaction, {
@@ -1188,8 +1302,9 @@ class AppRepository {
               },
       });
       await _writeCachedList(_cacheKey('transactions'), cached);
-      await _removeCachedKey(_transactionsMonthCacheKey(transactionDate));
+      await _clearTransactionsMonthCaches();
     }
+    _notifyDataChanged();
   }
 
   Future<void> _createTransactionRemote({
@@ -1229,11 +1344,14 @@ class AppRepository {
       final cached = await _readCachedList(_cacheKey('transactions'));
       cached.removeWhere((row) => row['id']?.toString() == transactionId);
       await _writeCachedList(_cacheKey('transactions'), cached);
+      await _clearTransactionsMonthCaches();
+      _notifyDataChanged();
       return;
     }
     try {
       await _deleteTransactionRemote(transactionId);
       await _removeCachedKey(_cacheKey('transactions'));
+      await _clearTransactionsMonthCaches();
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
       await _enqueueOperation(
@@ -1241,7 +1359,9 @@ class AppRepository {
       final cached = await _readCachedList(_cacheKey('transactions'));
       cached.removeWhere((row) => row['id']?.toString() == transactionId);
       await _writeCachedList(_cacheKey('transactions'), cached);
+      await _clearTransactionsMonthCaches();
     }
+    _notifyDataChanged();
   }
 
   Future<void> _deleteTransactionRemote(String transactionId) async {
@@ -1376,6 +1496,7 @@ class AppRepository {
       await _writeCachedList(
           _cacheKey('savings_goal_contributions'), contributions);
     }
+    _notifyDataChanged();
   }
 
   Future<void> _addSavingsProgressRemote({
@@ -1601,6 +1722,7 @@ class AppRepository {
       });
       await _removeCachedKey(_cacheKey('accounts'));
     }
+    _notifyDataChanged();
   }
 
   Future<void> _exchangeAccountCurrencyRemote({
@@ -1666,6 +1788,193 @@ class AppRepository {
       }
       rethrow;
     }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchLoans() async {
+    final user = currentUser;
+    if (user == null) return [];
+    await _syncPendingOperationsIfNeeded();
+    final key = _cacheKey('loans');
+    try {
+      final data = await _client
+          .from('loans')
+          .select()
+          .eq('user_id', user.id)
+          .order('created_at', ascending: false);
+      final mapped = List<Map<String, dynamic>>.from(data);
+      await _writeCachedList(key, mapped);
+      return mapped;
+    } catch (error) {
+      if (_isNetworkError(error)) {
+        return _readCachedList(key);
+      }
+      rethrow;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchLoanPayments() async {
+    final user = currentUser;
+    if (user == null) return [];
+    await _syncPendingOperationsIfNeeded();
+    final key = _cacheKey('loan_payments');
+    try {
+      final data = await _client
+          .from('loan_payments')
+          .select()
+          .eq('user_id', user.id)
+          .order('payment_date', ascending: false)
+          .order('created_at', ascending: false)
+          .limit(2000);
+      final mapped = List<Map<String, dynamic>>.from(data);
+      await _writeCachedList(key, mapped);
+      return mapped;
+    } catch (error) {
+      if (_isNetworkError(error)) {
+        return _readCachedList(key);
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> createLoan({
+    required String personName,
+    required double totalAmount,
+    required String direction,
+    String currencyCode = 'USD',
+    String? note,
+    DateTime? dueDate,
+  }) async {
+    final user = currentUser;
+    if (user == null) return;
+    final localId = _newLocalId('loan');
+    try {
+      await _createLoanRemote(
+        personName: personName,
+        totalAmount: totalAmount,
+        direction: direction,
+        currencyCode: currencyCode,
+        note: note,
+        dueDate: dueDate,
+      );
+      await _removeCachedKey(_cacheKey('loans'));
+    } catch (error) {
+      if (!_isNetworkError(error)) rethrow;
+      await _enqueueOperation(_opCreateLoan, {
+        'local_id': localId,
+        'person_name': personName,
+        'total_amount': totalAmount,
+        'direction': direction,
+        'currency_code': currencyCode,
+        'note': note,
+        'due_date': dueDate?.toIso8601String(),
+      });
+      final cached = await _readCachedList(_cacheKey('loans'));
+      cached.insert(0, {
+        'id': localId,
+        'user_id': user.id,
+        'person_name': personName.trim(),
+        'total_amount': totalAmount,
+        'currency_code': currencyCode,
+        'direction': direction,
+        'note': note?.trim().isEmpty == true ? null : note?.trim(),
+        'due_date': dueDate?.toIso8601String(),
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      await _writeCachedList(_cacheKey('loans'), cached);
+    }
+    _notifyDataChanged();
+  }
+
+  Future<void> addLoanPayment({
+    required String loanId,
+    required double amount,
+    required DateTime paymentDate,
+    String? note,
+  }) async {
+    final user = currentUser;
+    if (user == null) return;
+    try {
+      await _addLoanPaymentRemote(
+        loanId: loanId,
+        amount: amount,
+        paymentDate: paymentDate,
+        note: note,
+      );
+      await _removeCachedKey(_cacheKey('loan_payments'));
+    } catch (error) {
+      if (!_isNetworkError(error)) rethrow;
+      await _enqueueOperation(_opAddLoanPayment, {
+        'loan_id': loanId,
+        'amount': amount,
+        'payment_date': paymentDate.toIso8601String(),
+        'note': note,
+      });
+      final payments = await _readCachedList(_cacheKey('loan_payments'));
+      payments.insert(0, {
+        'id': _newLocalId('loan_payment'),
+        'user_id': user.id,
+        'loan_id': loanId,
+        'amount': amount,
+        'payment_date': paymentDate.toIso8601String(),
+        'note': note,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      await _writeCachedList(_cacheKey('loan_payments'), payments);
+    }
+    _notifyDataChanged();
+  }
+
+  Future<String> _createLoanRemote({
+    required String personName,
+    required double totalAmount,
+    required String direction,
+    required String currencyCode,
+    String? note,
+    DateTime? dueDate,
+  }) async {
+    final user = currentUser;
+    if (user == null) return '';
+    final inserted = await _client
+        .from('loans')
+        .insert({
+          'user_id': user.id,
+          'person_name': personName.trim(),
+          'total_amount': totalAmount,
+          'currency_code': currencyCode,
+          'direction': direction,
+          'note': note?.trim().isEmpty == true ? null : note?.trim(),
+          'due_date': dueDate?.toIso8601String().split('T').first,
+        })
+        .select('id')
+        .single();
+    return (inserted['id'] ?? '').toString();
+  }
+
+  Future<void> _addLoanPaymentRemote({
+    required String loanId,
+    required double amount,
+    required DateTime paymentDate,
+    String? note,
+  }) async {
+    final user = currentUser;
+    if (user == null) return;
+    await _client.from('loan_payments').insert({
+      'user_id': user.id,
+      'loan_id': loanId,
+      'amount': amount,
+      'payment_date': paymentDate.toIso8601String().split('T').first,
+      'note': note?.trim().isEmpty == true ? null : note?.trim(),
+    });
+  }
+
+  Future<void> deleteLoan(String loanId) async {
+    final user = currentUser;
+    if (user == null) return;
+    await _client.from('loan_payments').delete().eq('loan_id', loanId).eq('user_id', user.id);
+    await _client.from('loans').delete().eq('id', loanId).eq('user_id', user.id);
+    await _removeCachedKey(_cacheKey('loans'));
+    await _removeCachedKey(_cacheKey('loan_payments'));
+    _notifyDataChanged();
   }
 }
 
