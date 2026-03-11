@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/animated_appear.dart';
+import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -88,15 +91,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return RefreshIndicator(
-      onRefresh: () async {
-        setState(() {
-          _future = _loadData();
-        });
-      },
-      child: FutureBuilder<_DashboardData>(
-        future: _future,
-        builder: (context, snapshot) {
+    return Scaffold(
+      body: AppPageScaffold(
+        child: RefreshIndicator(
+          onRefresh: () async {
+            setState(() {
+              _future = _loadData();
+            });
+          },
+          child: FutureBuilder<_DashboardData>(
+            future: _future,
+            builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
@@ -116,9 +121,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           final netFlow = incomeMonth - expenseMonth;
 
           return ListView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(2, 12, 2, 120),
             children: [
-              Container(
+              AnimatedAppear(
+                child: Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(22),
@@ -151,31 +157,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                   ],
                 ),
+                ),
               ),
               const SizedBox(height: 12),
-              _metricCard(
+              AnimatedAppear(
+                delayMs: 70,
+                child: _metricCard(
                 title: 'Income This Month',
                 value: formatMoney(incomeMonth, currencyCode: _currencyCode),
                 icon: Icons.trending_up_rounded,
                 color: const Color(0xFF1C8F5F),
-              ),
-              _metricCard(
+              )),
+              AnimatedAppear(
+                delayMs: 120,
+                child: _metricCard(
                 title: 'Expense This Month',
                 value: formatMoney(expenseMonth, currencyCode: _currencyCode),
                 icon: Icons.trending_down_rounded,
                 color: const Color(0xFF9E3F5B),
-              ),
-              _metricCard(
+              )),
+              AnimatedAppear(
+                delayMs: 170,
+                child: _metricCard(
                 title: 'Savings Total',
                 value: formatMoney(savingsTotal, currencyCode: _currencyCode),
                 icon: Icons.savings_rounded,
                 color: const Color(0xFF4A5DCB),
-              ),
+              )),
               const SizedBox(height: 12),
               Text('Accounts', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 6),
               if (accounts.isEmpty)
-                const Card(
+                const GlassPanel(
                   child: Padding(
                     padding: EdgeInsets.all(14),
                     child: Text('No accounts yet. Add one from Settings -> Manage Accounts.'),
@@ -187,7 +200,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 final balance = ((account['display_balance'] as num?) ?? (account['current_balance'] as num?) ?? 0).toDouble();
                 final accountCurrency = (account['currency_code'] ?? _currencyCode).toString();
                 final displayCurrency = (account['display_currency'] ?? accountCurrency).toString();
-                return Card(
+                return GlassPanel(
                   child: ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                     leading: Container(
@@ -210,7 +223,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               }),
             ],
           );
-        },
+            },
+          ),
+        ),
       ),
     );
   }
@@ -221,7 +236,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     required IconData icon,
     required Color color,
   }) {
-    return Card(
+    return GlassPanel(
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Row(

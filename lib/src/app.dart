@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'core/ui/app_design_tokens.dart';
 import 'features/auth/auth_gate.dart';
 
 class MoneyManagementApp extends StatelessWidget {
@@ -7,7 +8,7 @@ class MoneyManagementApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const seed = Color(0xFF5E72E4);
+    const seed = AppDesignTokens.primary;
     final scheme = ColorScheme.fromSeed(
       seedColor: seed,
       brightness: Brightness.dark,
@@ -17,11 +18,24 @@ class MoneyManagementApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: scheme,
         useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFF0B1020),
+        scaffoldBackgroundColor: AppDesignTokens.backgroundTop,
+        pageTransitionsTheme: const PageTransitionsTheme(
+          builders: {
+            TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
+            TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+            TargetPlatform.windows: FadeForwardsPageTransitionsBuilder(),
+            TargetPlatform.macOS: FadeForwardsPageTransitionsBuilder(),
+            TargetPlatform.linux: FadeForwardsPageTransitionsBuilder(),
+          },
+        ),
         cardTheme: CardThemeData(
-          color: const Color(0xFF121A2E),
-          margin: const EdgeInsets.symmetric(vertical: 8),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          color: AppDesignTokens.surface,
+          elevation: 0,
+          margin: const EdgeInsets.symmetric(vertical: 7),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: const BorderSide(color: AppDesignTokens.stroke),
+          ),
         ),
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.transparent,
@@ -31,24 +45,45 @@ class MoneyManagementApp extends StatelessWidget {
         ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          fillColor: const Color(0xFF1A2338),
+          fillColor: AppDesignTokens.surfaceMuted,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide.none,
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: AppDesignTokens.stroke),
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: const BorderSide(color: Color(0xFF8EA2FF)),
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: AppDesignTokens.primary),
           ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: AppDesignTokens.stroke),
+          ),
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            backgroundColor: AppDesignTokens.primary,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+          ),
+        ),
+        floatingActionButtonTheme: const FloatingActionButtonThemeData(
+          backgroundColor: AppDesignTokens.primary,
+          foregroundColor: Colors.white,
         ),
         snackBarTheme: SnackBarThemeData(
           behavior: SnackBarBehavior.floating,
-          backgroundColor: scheme.surfaceContainerHighest,
+          backgroundColor: AppDesignTokens.surfaceElevated,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           contentTextStyle: const TextStyle(color: Colors.white),
         ),
         navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: const Color(0xFF111A2D),
-          indicatorColor: const Color(0xFF32457A),
+          backgroundColor: AppDesignTokens.surface,
+          indicatorColor: const Color(0x663D5BD5),
+          height: 66,
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
             final selected = states.contains(WidgetState.selected);
             return TextStyle(
@@ -59,9 +94,10 @@ class MoneyManagementApp extends StatelessWidget {
           }),
         ),
         textTheme: const TextTheme(
-          headlineSmall: TextStyle(fontWeight: FontWeight.w700),
-          titleLarge: TextStyle(fontWeight: FontWeight.w700),
-          titleMedium: TextStyle(fontWeight: FontWeight.w600),
+          headlineSmall: TextStyle(fontWeight: FontWeight.w800, letterSpacing: -0.2),
+          titleLarge: TextStyle(fontWeight: FontWeight.w800, letterSpacing: -0.2),
+          titleMedium: TextStyle(fontWeight: FontWeight.w700),
+          bodyLarge: TextStyle(height: 1.3),
         ),
       ),
       home: const AuthGate(),

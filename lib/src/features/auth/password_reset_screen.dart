@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/glass_panel.dart';
 
 class PasswordResetScreen extends StatefulWidget {
   const PasswordResetScreen({super.key});
@@ -53,12 +55,13 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Reset Password')),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 430),
-          child: Card(
-            margin: const EdgeInsets.all(18),
-            child: Padding(
+      body: AppPageScaffold(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 430),
+            child: GlassPanel(
+              margin: const EdgeInsets.all(18),
+              child: Padding(
               padding: const EdgeInsets.all(22),
               child: Form(
                 key: _formKey,
@@ -125,6 +128,7 @@ class _PasswordResetScreenState extends State<PasswordResetScreen> {
                     ),
                   ],
                 ),
+              ),
               ),
             ),
           ),

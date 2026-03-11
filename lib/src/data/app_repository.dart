@@ -31,6 +31,7 @@ class AppRepository {
   static const _opUpsertBudget = 'upsert_budget';
   static const _opExchangeAccountCurrency = 'exchange_account_currency';
   static const _opCreateLoan = 'create_loan';
+  static const _opUpdateLoan = 'update_loan';
   static const _opAddLoanPayment = 'add_loan_payment';
   static const List<String> _defaultExpenseCategories = [
     'Food',
@@ -527,9 +528,26 @@ class AppRepository {
               }
               cacheChanged = true;
               break;
+            case _opUpdateLoan:
+              await _updateLoanRemote(
+                loanId: (payload['loan_id'] ?? '').toString(),
+                personName: (payload['person_name'] ?? '').toString(),
+                totalAmount:
+                    ((payload['total_amount'] as num?) ?? 0).toDouble(),
+                direction: (payload['direction'] ?? 'owed_to_me').toString(),
+                currencyCode:
+                    (payload['currency_code'] ?? 'USD').toString(),
+                note: payload['note']?.toString(),
+                dueDate: payload['due_date'] == null
+                    ? null
+                    : DateTime.tryParse(payload['due_date'].toString()),
+              );
+              cacheChanged = true;
+              break;
             case _opAddLoanPayment:
-              final resolvedLoan = await _resolveLoanPayload(
+              final resolvedLoan = await _resolveLoanPaymentPayload(
                 payload,
+                accountIdMap: accountIdMap,
                 loanIdMap: loanIdMap,
               );
               if (_containsUnresolvedLocalRef(resolvedLoan)) {
@@ -540,6 +558,7 @@ class AppRepository {
                 loanId: (resolvedLoan['loan_id'] ?? '').toString(),
                 amount:
                     ((resolvedLoan['amount'] as num?) ?? 0).toDouble(),
+                accountId: (resolvedLoan['account_id'] ?? '').toString(),
                 paymentDate: DateTime.parse(
                   (resolvedLoan['payment_date'] ??
                           DateTime.now().toIso8601String())
@@ -635,11 +654,12 @@ class AppRepository {
     return data;
   }
 
-  Future<Map<String, dynamic>> _resolveLoanPayload(
+  Future<Map<String, dynamic>> _resolveLoanPaymentPayload(
     Map<String, dynamic> payload, {
+    required Map<String, String> accountIdMap,
     required Map<String, String> loanIdMap,
   }) async {
-    final data = Map<String, dynamic>.from(payload);
+    final data = await _resolveAccountPayload(payload, accountIdMap);
     final loanId = data['loan_id']?.toString();
     if (_isLocalId(loanId) && loanIdMap.containsKey(loanId)) {
       data['loan_id'] = loanIdMap[loanId];
@@ -1458,6 +1478,21 @@ class AppRepository {
     required String accountId,
     String? note,
   }) async {
+    final goals = await fetchSavingsGoals();
+    final goal = goals.firstWhere(
+      (row) => row['id']?.toString() == goalId,
+      orElse: () => <String, dynamic>{},
+    );
+    final target = ((goal['target_amount'] as num?) ?? 0).toDouble();
+    final current = ((goal['current_amount'] as num?) ?? 0).toDouble();
+    final remaining = (target - current).clamp(0, double.infinity);
+    if (remaining <= 0) {
+      throw Exception('This savings goal is already completed.');
+    }
+    if (amount > remaining) {
+      throw Exception(
+          'Amount exceeds remaining goal amount (${remaining.toStringAsFixed(2)}).');
+    }
     try {
       await _addSavingsProgressRemote(
         goalId: goalId,
@@ -1888,24 +1923,53 @@ class AppRepository {
   Future<void> addLoanPayment({
     required String loanId,
     required double amount,
+    required String accountId,
     required DateTime paymentDate,
     String? note,
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final loans = await fetchLoans();
+    final loan = loans.firstWhere(
+      (row) => row['id']?.toString() == loanId,
+      orElse: () => <String, dynamic>{},
+    );
+    final direction = (loan['direction'] ?? 'owed_to_me').toString();
+    final personName = (loan['person_name'] ?? '').toString();
+    final transactionKind = direction == 'owed_to_me' ? 'income' : 'expense';
+    final transactionNote = note?.trim().isNotEmpty == true
+        ? note!.trim()
+        : direction == 'owed_to_me'
+            ? 'Loan payment received from $personName'
+            : 'Loan payment sent to $personName';
+    final paid = await _totalPaidForLoan(loanId);
+    final totalAmount = ((loan['total_amount'] as num?) ?? 0).toDouble();
+    final remaining = (totalAmount - paid).clamp(0, double.infinity);
+    if (remaining <= 0) {
+      throw Exception('This loan is already fully paid.');
+    }
+    if (amount > remaining) {
+      throw Exception(
+          'Amount exceeds remaining loan amount (${remaining.toStringAsFixed(2)}).');
+    }
     try {
       await _addLoanPaymentRemote(
         loanId: loanId,
         amount: amount,
+        accountId: accountId,
         paymentDate: paymentDate,
         note: note,
       );
       await _removeCachedKey(_cacheKey('loan_payments'));
+      await _removeCachedKey(_cacheKey('accounts'));
+      await _removeCachedKey(_cacheKey('transactions'));
+      await _clearTransactionsMonthCaches();
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
       await _enqueueOperation(_opAddLoanPayment, {
         'loan_id': loanId,
         'amount': amount,
+        'account_id': accountId,
         'payment_date': paymentDate.toIso8601String(),
         'note': note,
       });
@@ -1914,14 +1978,103 @@ class AppRepository {
         'id': _newLocalId('loan_payment'),
         'user_id': user.id,
         'loan_id': loanId,
+        'account_id': accountId,
         'amount': amount,
         'payment_date': paymentDate.toIso8601String(),
         'note': note,
         'created_at': DateTime.now().toIso8601String(),
       });
       await _writeCachedList(_cacheKey('loan_payments'), payments);
+
+      final accounts = await _readCachedList(_cacheKey('accounts'));
+      for (final account in accounts) {
+        if (account['id']?.toString() != accountId) continue;
+        final current = ((account['current_balance'] as num?) ?? 0).toDouble();
+        account['current_balance'] =
+            transactionKind == 'income' ? current + amount : current - amount;
+      }
+      await _writeCachedList(_cacheKey('accounts'), accounts);
+
+      final transactions = await _readCachedList(_cacheKey('transactions'));
+      transactions.insert(0, {
+        'id': _newLocalId('loan_tx'),
+        'user_id': user.id,
+        'account_id': accountId,
+        'category_id': null,
+        'kind': transactionKind,
+        'amount': amount,
+        'note': transactionNote,
+        'transaction_date': paymentDate.toIso8601String().split('T').first,
+        'transfer_account_id': null,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      await _writeCachedList(_cacheKey('transactions'), transactions);
+      await _clearTransactionsMonthCaches();
     }
     _notifyDataChanged();
+  }
+
+  Future<void> updateLoan({
+    required String loanId,
+    required String personName,
+    required double totalAmount,
+    required String direction,
+    required String currencyCode,
+    String? note,
+    DateTime? dueDate,
+  }) async {
+    final paid = await _totalPaidForLoan(loanId);
+    if (totalAmount < paid) {
+      throw Exception(
+          'Total amount cannot be lower than already paid (${paid.toStringAsFixed(2)}).');
+    }
+
+    try {
+      await _updateLoanRemote(
+        loanId: loanId,
+        personName: personName,
+        totalAmount: totalAmount,
+        direction: direction,
+        currencyCode: currencyCode,
+        note: note,
+        dueDate: dueDate,
+      );
+      await _removeCachedKey(_cacheKey('loans'));
+    } catch (error) {
+      if (!_isNetworkError(error)) rethrow;
+      await _enqueueOperation(_opUpdateLoan, {
+        'loan_id': loanId,
+        'person_name': personName,
+        'total_amount': totalAmount,
+        'direction': direction,
+        'currency_code': currencyCode,
+        'note': note,
+        'due_date': dueDate?.toIso8601String(),
+      });
+
+      final loans = await _readCachedList(_cacheKey('loans'));
+      for (final row in loans) {
+        if (row['id']?.toString() != loanId) continue;
+        row['person_name'] = personName;
+        row['total_amount'] = totalAmount;
+        row['direction'] = direction;
+        row['currency_code'] = currencyCode;
+        row['note'] = note?.trim().isEmpty == true ? null : note?.trim();
+        row['due_date'] = dueDate?.toIso8601String();
+      }
+      await _writeCachedList(_cacheKey('loans'), loans);
+    }
+    _notifyDataChanged();
+  }
+
+  Future<double> _totalPaidForLoan(String loanId) async {
+    final payments = await fetchLoanPayments();
+    var paid = 0.0;
+    for (final row in payments) {
+      if (row['loan_id']?.toString() != loanId) continue;
+      paid += ((row['amount'] as num?) ?? 0).toDouble();
+    }
+    return paid;
   }
 
   Future<String> _createLoanRemote({
@@ -1953,18 +2106,49 @@ class AppRepository {
   Future<void> _addLoanPaymentRemote({
     required String loanId,
     required double amount,
+    required String accountId,
     required DateTime paymentDate,
     String? note,
   }) async {
     final user = currentUser;
     if (user == null) return;
-    await _client.from('loan_payments').insert({
-      'user_id': user.id,
-      'loan_id': loanId,
-      'amount': amount,
-      'payment_date': paymentDate.toIso8601String().split('T').first,
-      'note': note?.trim().isEmpty == true ? null : note?.trim(),
-    });
+    await _client.rpc(
+      'record_loan_payment',
+      params: {
+        'p_user_id': user.id,
+        'p_loan_id': loanId,
+        'p_account_id': accountId,
+        'p_amount': amount,
+        'p_payment_date': paymentDate.toIso8601String().split('T').first,
+        'p_note': note?.trim().isEmpty == true ? null : note?.trim(),
+      },
+    );
+  }
+
+  Future<void> _updateLoanRemote({
+    required String loanId,
+    required String personName,
+    required double totalAmount,
+    required String direction,
+    required String currencyCode,
+    String? note,
+    DateTime? dueDate,
+  }) async {
+    final user = currentUser;
+    if (user == null) return;
+    await _client.rpc(
+      'update_loan',
+      params: {
+        'p_user_id': user.id,
+        'p_loan_id': loanId,
+        'p_person_name': personName.trim(),
+        'p_total_amount': totalAmount,
+        'p_direction': direction,
+        'p_currency_code': currencyCode,
+        'p_due_date': dueDate?.toIso8601String().split('T').first,
+        'p_note': note?.trim().isEmpty == true ? null : note?.trim(),
+      },
+    );
   }
 
   Future<void> deleteLoan(String loanId) async {

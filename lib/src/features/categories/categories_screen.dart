@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
 
 class CategoriesScreen extends StatefulWidget {
@@ -130,8 +132,9 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
       appBar: AppBar(
         title: const Text('Manage Categories'),
       ),
-      body: Column(
-        children: [
+      body: AppPageScaffold(
+        child: Column(
+          children: [
           Padding(
             padding: const EdgeInsets.all(12),
             child: SegmentedButton<String>(
@@ -163,11 +166,12 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                     return ListView(children: const [SizedBox(height: 120), Center(child: Text('No categories'))]);
                   }
                   return ListView.builder(
+                    padding: const EdgeInsets.only(bottom: 108),
                     itemCount: items.length,
                     itemBuilder: (context, index) {
                       final item = items[index];
-                      return Card(
-                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      return GlassPanel(
+                        margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
                         child: ListTile(
                           contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                           leading: Container(
@@ -204,7 +208,8 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
               ),
             ),
           ),
-        ],
+          ],
+        ),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createCategory,

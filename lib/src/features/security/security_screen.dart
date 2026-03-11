@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../core/security/app_lock_service.dart';
+import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/glass_panel.dart';
 
 class SecurityScreen extends StatefulWidget {
   const SecurityScreen({super.key});
@@ -86,12 +88,13 @@ class _SecurityScreenState extends State<SecurityScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Security')),
-      body: _loading
+      body: AppPageScaffold(
+        child: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(2, 12, 2, 120),
               children: [
-                Card(
+                GlassPanel(
                   child: SwitchListTile(
                     value: _lockEnabled,
                     onChanged: (value) async {
@@ -110,7 +113,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                     subtitle: const Text('Require passcode when opening app'),
                   ),
                 ),
-                Card(
+                GlassPanel(
                   child: ListTile(
                     title: const Text('Set or Change Passcode'),
                     subtitle: const Text('Minimum 4 digits'),
@@ -120,6 +123,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                 ),
               ],
             ),
+      ),
     );
   }
 }

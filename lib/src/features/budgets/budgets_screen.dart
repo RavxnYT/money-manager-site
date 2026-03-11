@@ -3,6 +3,8 @@ import 'package:intl/intl.dart';
 
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
 
 class BudgetsScreen extends StatefulWidget {
@@ -62,10 +64,6 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
   Future<void> _addBudget() async {
     final categories = await widget.repository.fetchCategories('expense');
     if (categories.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Create expense categories first.')),
-      );
       return;
     }
 
@@ -79,10 +77,6 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
       uniqueCategories.add(row);
     }
     if (uniqueCategories.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No valid categories found. Please create one first.')),
-      );
       return;
     }
     selectedCategoryId = uniqueCategories.first['id'].toString();
@@ -138,11 +132,12 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: FutureBuilder<_BudgetViewData>(
-          future: _future,
-          builder: (context, snapshot) {
+      body: AppPageScaffold(
+        child: RefreshIndicator(
+          onRefresh: _reload,
+          child: FutureBuilder<_BudgetViewData>(
+            future: _future,
+            builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
@@ -156,6 +151,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
               return ListView(children: const [SizedBox(height: 120), Center(child: Text('No budgets set this month'))]);
             }
             return ListView.builder(
+              padding: const EdgeInsets.only(bottom: 108),
               itemCount: items.length,
               itemBuilder: (context, index) {
                 final item = items[index];
@@ -165,8 +161,8 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
                 final spent = spentMap[categoryId] ?? 0;
                 final progress = (spent / (amount == 0 ? 1 : amount)).clamp(0, 1).toDouble();
                 final remaining = amount - spent;
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                return GlassPanel(
+                  margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
                   child: Padding(
                     padding: const EdgeInsets.all(14),
                     child: Column(
@@ -209,7 +205,8 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
                 );
               },
             );
-          },
+            },
+          ),
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(

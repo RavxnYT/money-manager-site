@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_page_scaffold.dart';
 import '../../data/app_repository.dart';
 
 class LoansScreen extends StatefulWidget {
@@ -159,10 +160,27 @@ class _LoansScreenState extends State<LoansScreen> {
     }
   }
 
-  Future<void> _addPayment(Map<String, dynamic> loan) async {
+  Future<void> _addPayment(Map<String, dynamic> loan, double alreadyPaid) async {
+    final accounts = await widget.repository.fetchAccounts();
+    if (!mounted) return;
+    if (accounts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please create an account first.')),
+      );
+      return;
+    }
     final loanId = loan['id']?.toString() ?? '';
     final total = ((loan['total_amount'] as num?) ?? 0).toDouble();
+    final remaining = (total - alreadyPaid).clamp(0, double.infinity);
+    if (remaining <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This loan is already fully paid.')),
+      );
+      return;
+    }
     final currency = (loan['currency_code'] ?? _currencyCode).toString();
+    final direction = (loan['direction'] ?? 'owed_to_me').toString();
+    String selectedAccountId = accounts.first['id'].toString();
     final amountController = TextEditingController();
     final noteController = TextEditingController();
     DateTime paymentDate = DateTime.now();
@@ -175,12 +193,35 @@ class _LoansScreenState extends State<LoansScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              DropdownButtonFormField<String>(
+                value: selectedAccountId,
+                decoration: InputDecoration(
+                  labelText: direction == 'owed_to_me'
+                      ? 'Add money to account'
+                      : 'Pay from account',
+                ),
+                items: accounts
+                    .map(
+                      (e) => DropdownMenuItem<String>(
+                        value: e['id'].toString(),
+                        child: Text((e['name'] ?? '').toString()),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  setInnerState(() {
+                    selectedAccountId = value ?? selectedAccountId;
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
               TextField(
                 controller: amountController,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(
                   labelText: 'Amount',
-                  hintText: 'Total loan: ${formatMoney(total, currencyCode: currency)}',
+                  hintText:
+                      'Remaining: ${formatMoney(remaining, currencyCode: currency)}',
                 ),
               ),
               const SizedBox(height: 8),
@@ -216,16 +257,174 @@ class _LoansScreenState extends State<LoansScreen> {
 
     final amount = double.tryParse(amountController.text);
     if (ok == true && amount != null && amount > 0) {
+      if (amount > remaining) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Amount exceeds remaining loan amount (${formatMoney(remaining, currencyCode: currency)}).',
+            ),
+          ),
+        );
+        return;
+      }
       try {
         await widget.repository.addLoanPayment(
           loanId: loanId,
           amount: amount,
+          accountId: selectedAccountId,
           paymentDate: paymentDate,
           note: noteController.text.trim().isEmpty ? null : noteController.text.trim(),
         );
         _reload();
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payment recorded')));
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyErrorMessage(e))),
+        );
+      }
+    }
+  }
+
+  Future<void> _editLoan(Map<String, dynamic> loan, double alreadyPaid) async {
+    final personName = TextEditingController(
+      text: (loan['person_name'] ?? '').toString(),
+    );
+    final totalAmount = TextEditingController(
+      text: ((loan['total_amount'] as num?) ?? 0).toString(),
+    );
+    String currencyCode = (loan['currency_code'] ?? _currencyCode).toString();
+    String direction = (loan['direction'] ?? 'owed_to_me').toString();
+    final note = TextEditingController(
+      text: (loan['note'] ?? '').toString(),
+    );
+    DateTime? dueDate = DateTime.tryParse((loan['due_date'] ?? '').toString());
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setInnerState) => AlertDialog(
+          title: const Text('Edit Loan'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  controller: personName,
+                  decoration: const InputDecoration(labelText: 'Person name'),
+                ),
+                const SizedBox(height: 8),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(
+                        value: 'owed_to_me',
+                        label: Text('They owe me'),
+                        icon: Icon(Icons.arrow_downward)),
+                    ButtonSegment(
+                        value: 'owed_by_me',
+                        label: Text('I owe them'),
+                        icon: Icon(Icons.arrow_upward)),
+                  ],
+                  selected: {direction},
+                  onSelectionChanged: (v) =>
+                      setInnerState(() => direction = v.first),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: totalAmount,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: 'Total amount',
+                    helperText:
+                        'Already paid: ${formatMoney(alreadyPaid, currencyCode: currencyCode)}',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: currencyCode,
+                  decoration: const InputDecoration(labelText: 'Currency'),
+                  items: supportedCurrencyCodes
+                      .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setInnerState(() => currencyCode = v);
+                  },
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    dueDate == null
+                        ? 'Due date (optional)'
+                        : 'Due: ${dueDate!.toIso8601String().split('T').first}',
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.calendar_today),
+                    onPressed: () async {
+                      final picked = await showDatePicker(
+                        context: context,
+                        initialDate: dueDate ?? DateTime.now(),
+                        firstDate: DateTime(2000),
+                        lastDate: DateTime(2100),
+                      );
+                      if (picked != null) setInnerState(() => dueDate = picked);
+                    },
+                  ),
+                ),
+                TextField(
+                  controller: note,
+                  decoration: const InputDecoration(labelText: 'Note (optional)'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Save')),
+          ],
+        ),
+      ),
+    );
+
+    final parsedTotal = double.tryParse(totalAmount.text);
+    if (ok == true &&
+        parsedTotal != null &&
+        parsedTotal > 0 &&
+        personName.text.trim().isNotEmpty) {
+      if (parsedTotal < alreadyPaid) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Total amount cannot be lower than already paid (${formatMoney(alreadyPaid, currencyCode: currencyCode)}).',
+            ),
+          ),
+        );
+        return;
+      }
+      try {
+        await widget.repository.updateLoan(
+          loanId: loan['id'].toString(),
+          personName: personName.text.trim(),
+          totalAmount: parsedTotal,
+          direction: direction,
+          currencyCode: currencyCode,
+          note: note.text.trim().isEmpty ? null : note.text.trim(),
+          dueDate: dueDate,
+        );
+        _reload();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Loan updated')),
+        );
       } catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -270,11 +469,12 @@ class _LoansScreenState extends State<LoansScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: FutureBuilder<_LoansViewData>(
-          future: _future,
-          builder: (context, snapshot) {
+      body: AppPageScaffold(
+        child: RefreshIndicator(
+          onRefresh: _reload,
+          child: FutureBuilder<_LoansViewData>(
+            future: _future,
+            builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
@@ -336,7 +536,14 @@ class _LoansScreenState extends State<LoansScreen> {
                         loan: loan,
                         paidByLoan: paidByLoan,
                         currencyCode: _currencyCode,
-                        onAddPayment: () => _addPayment(loan),
+                        onAddPayment: () => _addPayment(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
+                        onEdit: () => _editLoan(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
                         onDelete: () => _deleteLoan(loan),
                       )),
                   const SizedBox(height: 16),
@@ -362,13 +569,21 @@ class _LoansScreenState extends State<LoansScreen> {
                         loan: loan,
                         paidByLoan: paidByLoan,
                         currencyCode: _currencyCode,
-                        onAddPayment: () => _addPayment(loan),
+                        onAddPayment: () => _addPayment(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
+                        onEdit: () => _editLoan(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
                         onDelete: () => _deleteLoan(loan),
                       )),
                 ],
               ],
             );
-          },
+            },
+          ),
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -386,6 +601,7 @@ class _LoanCard extends StatelessWidget {
     required this.paidByLoan,
     required this.currencyCode,
     required this.onAddPayment,
+    required this.onEdit,
     required this.onDelete,
   });
 
@@ -393,6 +609,7 @@ class _LoanCard extends StatelessWidget {
   final Map<String, double> paidByLoan;
   final String currencyCode;
   final VoidCallback onAddPayment;
+  final VoidCallback onEdit;
   final VoidCallback onDelete;
 
   @override
@@ -430,9 +647,11 @@ class _LoanCard extends StatelessWidget {
                   PopupMenuButton<String>(
                     icon: const Icon(Icons.more_vert),
                     onSelected: (value) {
+                      if (value == 'edit') onEdit();
                       if (value == 'delete') onDelete();
                     },
                     itemBuilder: (_) => [
+                      const PopupMenuItem(value: 'edit', child: Text('Edit loan')),
                       const PopupMenuItem(value: 'delete', child: Text('Delete loan')),
                     ],
                   ),

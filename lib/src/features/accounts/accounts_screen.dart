@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
 
 class AccountsScreen extends StatefulWidget {
@@ -31,6 +33,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   Future<void> _reload() async {
+    if (!mounted) return;
     setState(() {
       _future = _loadAccountsView();
     });
@@ -114,6 +117,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
         openingBalance: double.tryParse(opening.text.trim()) ?? 0,
         currencyCode: currencyCode,
       );
+      if (!mounted) return;
       _reload();
     }
   }
@@ -173,6 +177,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
         type: type,
         currencyCode: currencyCode,
       );
+      if (!mounted) return;
       _reload();
     }
   }
@@ -191,6 +196,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
     );
     if (ok == true) {
       await widget.repository.deleteAccount(accountId: account['id'].toString());
+      if (!mounted) return;
       _reload();
     }
   }
@@ -261,11 +267,12 @@ class _AccountsScreenState extends State<AccountsScreen> {
       appBar: AppBar(
         title: const Text('Manage Accounts'),
       ),
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: FutureBuilder<List<Map<String, dynamic>>>(
-          future: _future,
-          builder: (context, snapshot) {
+      body: AppPageScaffold(
+        child: RefreshIndicator(
+          onRefresh: _reload,
+          child: FutureBuilder<List<Map<String, dynamic>>>(
+            future: _future,
+            builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
@@ -277,14 +284,15 @@ class _AccountsScreenState extends State<AccountsScreen> {
               return ListView(children: const [SizedBox(height: 120), Center(child: Text('No accounts yet'))]);
             }
             return ListView.builder(
+              padding: const EdgeInsets.only(bottom: 112),
               itemCount: items.length,
               itemBuilder: (_, index) {
                 final item = items[index];
                 final balance = ((item['display_balance'] as num?) ?? (item['current_balance'] as num?) ?? 0).toDouble();
                 final type = (item['type'] as String? ?? '').toUpperCase();
                 final currencyCode = (item['display_currency'] ?? item['currency_code'] ?? _defaultCurrency).toString();
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                return GlassPanel(
+                  margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
                   child: ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                     leading: Container(
@@ -310,7 +318,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 );
               },
             );
-          },
+            },
+          ),
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(

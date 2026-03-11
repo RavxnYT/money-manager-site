@@ -3,6 +3,8 @@ import 'package:intl/intl.dart';
 
 import '../../core/friendly_error.dart';
 import '../../core/notifications/notification_service.dart';
+import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
 
 class RecurringScreen extends StatefulWidget {
@@ -218,11 +220,12 @@ class _RecurringScreenState extends State<RecurringScreen> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: FutureBuilder<List<Map<String, dynamic>>>(
-          future: _future,
-          builder: (context, snapshot) {
+      body: AppPageScaffold(
+        child: RefreshIndicator(
+          onRefresh: _reload,
+          child: FutureBuilder<List<Map<String, dynamic>>>(
+            future: _future,
+            builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
@@ -245,6 +248,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
             }
 
             return ListView.builder(
+              padding: const EdgeInsets.only(bottom: 108),
               itemCount: items.length,
               itemBuilder: (context, index) {
                 final item = items[index];
@@ -256,8 +260,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
                 final category = _relationName(item['categories']);
                 final isActive = (item['is_active'] as bool?) ?? false;
 
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                return GlassPanel(
+                  margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
                   child: ListTile(
                     title: Text('${currency.format(amount)} • ${kind.toUpperCase()}'),
                     subtitle: Text('$account • $category • $freq • Next: $nextRun'),
@@ -276,7 +280,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
                 );
               },
             );
-          },
+            },
+          ),
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(

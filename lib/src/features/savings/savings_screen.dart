@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_page_scaffold.dart';
 import '../../data/app_repository.dart';
 
 class SavingsScreen extends StatefulWidget {
@@ -93,7 +94,18 @@ class _SavingsScreenState extends State<SavingsScreen> {
     }
   }
 
-  Future<void> _addProgress(String goalId) async {
+  Future<void> _addProgress(Map<String, dynamic> goal) async {
+    final goalId = goal['id']?.toString() ?? '';
+    final current = ((goal['current_amount'] as num?) ?? 0).toDouble();
+    final target = ((goal['target_amount'] as num?) ?? 0).toDouble();
+    final remaining = (target - current).clamp(0, double.infinity);
+    if (remaining <= 0) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This savings goal is already completed.')),
+      );
+      return;
+    }
     final accounts = await widget.repository.fetchAccounts();
     if (!mounted) return;
     if (accounts.isEmpty) {
@@ -135,7 +147,11 @@ class _SavingsScreenState extends State<SavingsScreen> {
               TextField(
                 controller: amount,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Amount'),
+                decoration: InputDecoration(
+                  labelText: 'Amount',
+                  hintText:
+                      'Remaining: ${formatMoney(remaining, currencyCode: _currencyCode)}',
+                ),
               ),
               const SizedBox(height: 8),
               TextField(
@@ -153,6 +169,17 @@ class _SavingsScreenState extends State<SavingsScreen> {
     );
     final parsed = double.tryParse(amount.text);
     if (ok == true && parsed != null && parsed > 0) {
+      if (parsed > remaining) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Amount exceeds remaining goal amount (${formatMoney(remaining, currencyCode: _currencyCode)}).',
+            ),
+          ),
+        );
+        return;
+      }
       try {
         await widget.repository.addSavingsProgress(
           goalId: goalId,
@@ -173,11 +200,12 @@ class _SavingsScreenState extends State<SavingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: FutureBuilder<_SavingsViewData>(
-          future: _future,
-          builder: (context, snapshot) {
+      body: AppPageScaffold(
+        child: RefreshIndicator(
+          onRefresh: _reload,
+          child: FutureBuilder<_SavingsViewData>(
+            future: _future,
+            builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
@@ -190,6 +218,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
               return ListView(children: const [SizedBox(height: 120), Center(child: Text('No savings goals yet'))]);
             }
             return ListView.builder(
+              padding: const EdgeInsets.only(bottom: 108),
               itemCount: items.length,
               itemBuilder: (context, index) {
                 final item = items[index];
@@ -233,13 +262,14 @@ class _SavingsScreenState extends State<SavingsScreen> {
                     ),
                     trailing: IconButton(
                       icon: const Icon(Icons.add_circle_rounded),
-                      onPressed: () => _addProgress(item['id'] as String),
+                      onPressed: () => _addProgress(item),
                     ),
                   ),
                 );
               },
             );
-          },
+            },
+          ),
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(

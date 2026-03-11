@@ -3,6 +3,8 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import '../../data/app_repository.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/animated_appear.dart';
+import '../../core/ui/glass_panel.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
@@ -156,9 +158,11 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 430),
-            child: Card(
-              margin: const EdgeInsets.all(18),
-              child: Padding(
+            child: AnimatedAppear(
+              delayMs: 80,
+              child: GlassPanel(
+                margin: const EdgeInsets.all(18),
+                child: Padding(
                 padding: const EdgeInsets.all(22),
                 child: Form(
                   key: _formKey,
@@ -210,6 +214,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       if (!_isLogin) const SizedBox(height: 12),
                       TextFormField(
+                        key: const Key('login_email_field'),
                         controller: _emailController,
                         decoration: const InputDecoration(labelText: 'Email'),
                         validator: (value) {
@@ -220,6 +225,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: 12),
                       TextFormField(
+                        key: const Key('login_password_field'),
                         controller: _passwordController,
                         obscureText: _obscurePassword,
                         decoration: InputDecoration(
@@ -308,6 +314,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ],
                   ),
+                ),
                 ),
               ),
             ),

@@ -3,6 +3,8 @@ import 'package:intl/intl.dart';
 
 import '../../core/friendly_error.dart';
 import '../../core/notifications/notification_service.dart';
+import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
 
 class BillsScreen extends StatefulWidget {
@@ -169,11 +171,12 @@ class _BillsScreenState extends State<BillsScreen> {
     final currency = NumberFormat.currency(symbol: '\$');
     return Scaffold(
       appBar: AppBar(title: const Text('Bill Reminders')),
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: FutureBuilder<List<Map<String, dynamic>>>(
-          future: _future,
-          builder: (context, snapshot) {
+      body: AppPageScaffold(
+        child: RefreshIndicator(
+          onRefresh: _reload,
+          child: FutureBuilder<List<Map<String, dynamic>>>(
+            future: _future,
+            builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
@@ -195,6 +198,7 @@ class _BillsScreenState extends State<BillsScreen> {
               );
             }
             return ListView.builder(
+              padding: const EdgeInsets.only(bottom: 108),
               itemCount: rows.length,
               itemBuilder: (context, index) {
                 final row = rows[index];
@@ -210,8 +214,8 @@ class _BillsScreenState extends State<BillsScreen> {
                         ? const Color(0xFFFFC857)
                         : const Color(0xFF8EA2FF);
 
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                return GlassPanel(
+                  margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
                   child: ListTile(
                     title: Text('$title • ${currency.format(amount)}'),
                     subtitle: Text(
@@ -241,7 +245,8 @@ class _BillsScreenState extends State<BillsScreen> {
                 );
               },
             );
-          },
+            },
+          ),
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(

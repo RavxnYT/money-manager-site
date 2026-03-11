@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_page_scaffold.dart';
 import '../../data/app_repository.dart';
 
 class TransactionsScreen extends StatefulWidget {
@@ -96,11 +97,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: FutureBuilder<List<Map<String, dynamic>>>(
-          future: _future,
-          builder: (context, snapshot) {
+      body: AppPageScaffold(
+        child: RefreshIndicator(
+          onRefresh: _reload,
+          child: FutureBuilder<List<Map<String, dynamic>>>(
+            future: _future,
+            builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
@@ -154,7 +156,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             return Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                  padding: const EdgeInsets.fromLTRB(6, 12, 6, 8),
                   child: TextField(
                     controller: _searchController,
                     onChanged: (_) => setState(() {}),
@@ -165,7 +167,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
                   child: SegmentedButton<String>(
                     segments: const [
                       ButtonSegment(value: 'all', label: Text('All')),
@@ -179,7 +181,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                  padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
                   child: DropdownButtonFormField<String>(
                     value: _sortFilter,
                     items: const [
@@ -212,6 +214,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           ],
                         )
                       : ListView.builder(
+                          padding: const EdgeInsets.only(bottom: 110),
                           itemCount: filteredRows.length,
                           itemBuilder: (context, index) {
                             final row = filteredRows[index];
@@ -311,7 +314,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                 ),
               ],
             );
-          },
+            },
+          ),
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(

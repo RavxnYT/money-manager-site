@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/ads/support_rewarded_ad_service.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_page_scaffold.dart';
 import '../../data/app_repository.dart';
 import '../accounts/accounts_screen.dart';
 import '../categories/categories_screen.dart';
@@ -208,9 +209,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
+    return AppPageScaffold(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(2, 12, 2, 120),
+        children: [
         Text('Settings', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 10),
         Card(
@@ -306,7 +308,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: _deleteMyData,
           ),
         ),
-      ],
+        ],
+      ),
     );
   }
 }

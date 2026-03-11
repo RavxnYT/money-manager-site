@@ -3,6 +3,8 @@ import 'package:intl/intl.dart';
 
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
 
 class ReportsScreen extends StatefulWidget {
@@ -83,11 +85,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: FutureBuilder<_ReportData>(
-          future: _future,
-          builder: (context, snapshot) {
+      body: AppPageScaffold(
+        child: RefreshIndicator(
+          onRefresh: _reload,
+          child: FutureBuilder<_ReportData>(
+            future: _future,
+            builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
@@ -130,7 +133,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             final maxIncome = sortedIncome.isEmpty ? 1.0 : sortedIncome.first.value;
 
             return ListView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(2, 12, 2, 120),
               children: [
                 Row(
                   children: [
@@ -157,7 +160,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                Card(
+                GlassPanel(
                   child: Padding(
                     padding: const EdgeInsets.all(14),
                     child: Column(
@@ -180,7 +183,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 Text('Top Expense Categories', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 if (sortedExpenses.isEmpty)
-                  const Card(child: Padding(padding: EdgeInsets.all(14), child: Text('No expense data this month'))),
+                  const GlassPanel(child: Padding(padding: EdgeInsets.all(14), child: Text('No expense data this month'))),
                 ...sortedExpenses.take(6).map(
                   (e) => _barCard(
                     label: e.key,
@@ -194,7 +197,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 Text('Top Income Categories', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 if (sortedIncome.isEmpty)
-                  const Card(child: Padding(padding: EdgeInsets.all(14), child: Text('No income data this month'))),
+                  const GlassPanel(child: Padding(padding: EdgeInsets.all(14), child: Text('No income data this month'))),
                 ...sortedIncome.take(6).map(
                   (e) => _barCard(
                     label: e.key,
@@ -206,7 +209,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 ),
               ],
             );
-          },
+            },
+          ),
         ),
       ),
     );
@@ -235,7 +239,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     required double ratio,
     required Color color,
   }) {
-    return Card(
+    return GlassPanel(
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(

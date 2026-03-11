@@ -3,6 +3,7 @@ import 'dart:async';
 
 import '../../core/currency/currency_utils.dart';
 import '../../core/network/network_status_service.dart';
+import '../../core/ui/app_design_tokens.dart';
 import '../../data/app_repository.dart';
 import '../dashboard/dashboard_screen.dart';
 import '../loans/loans_screen.dart';
@@ -174,23 +175,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Money Management'),
-            Text(
-              _titles[_currentIndex],
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: Colors.white70),
-            ),
-          ],
+        title: AnimatedSwitcher(
+          duration: AppDesignTokens.quick,
+          child: Column(
+            key: ValueKey(_titles[_currentIndex]),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Money Management'),
+              Text(
+                _titles[_currentIndex],
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: Colors.white70),
+              ),
+            ],
+          ),
         ),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [Color(0xFF1B2540), Color(0xFF10192E)],
+              colors: [Color(0xFF25345E), Color(0xFF0D1527)],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -207,28 +212,64 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
-          if (_isOffline)
-            Container(
-              width: double.infinity,
-              color: const Color(0xFF7A2E2E),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: const Text(
-                'Offline mode: changes are saved locally. Connect to the internet to sync.',
-                style:
-                    TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                textAlign: TextAlign.center,
+          AnimatedSwitcher(
+            duration: AppDesignTokens.quick,
+            child: !_isOffline
+                ? const SizedBox.shrink()
+                : Container(
+                    key: const ValueKey('offline-banner'),
+                    width: double.infinity,
+                    margin: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                    decoration: BoxDecoration(
+                      color: const Color(0xB3521E2A),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0x55FF6B86)),
+                    ),
+                    child: const Text(
+                      'Offline mode: changes are saved locally and will sync when you reconnect.',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+          ),
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: AppDesignTokens.medium,
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) {
+                final slide = Tween<Offset>(
+                  begin: const Offset(0.03, 0),
+                  end: Offset.zero,
+                ).animate(animation);
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(position: slide, child: child),
+                );
+              },
+              child: KeyedSubtree(
+                key: ValueKey('tab-$_currentIndex-$_dataRevision'),
+                child: pages[_currentIndex],
               ),
             ),
-          Expanded(child: pages[_currentIndex]),
+          ),
         ],
       ),
       bottomNavigationBar: Container(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 14),
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF0E1529), Color(0xFF111A2D)],
+            colors: const [Color(0xFF0E1529), Color(0xFF111A2D)],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
+          ),
+          border: Border(
+            top: BorderSide(color: Colors.white.withOpacity(0.08)),
           ),
         ),
         child: NavigationBar(
