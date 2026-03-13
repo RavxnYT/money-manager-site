@@ -625,7 +625,7 @@ begin
   if not found then
     raise exception 'Bill reminder not found';
   end if;
-
+android-app-bundle
   perform public.create_transaction(
     p_user_id,
     r.account_id,

@@ -162,9 +162,9 @@ class _LoginScreenState extends State<LoginScreen> {
               delayMs: 80,
               child: GlassPanel(
                 margin: const EdgeInsets.all(18),
-                child: Padding(
-                padding: const EdgeInsets.all(22),
-                child: Form(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(22),
+                  child: Form(
                   key: _formKey,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -244,8 +244,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       if (_isLogin) ...[
                         const SizedBox(height: 6),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          spacing: 8,
+                          runSpacing: 4,
                           children: [
                             TextButton(
                               onPressed: _isLoading ? null : _sendResetPassword,
