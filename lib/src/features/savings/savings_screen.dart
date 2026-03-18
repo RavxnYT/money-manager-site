@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/app_page_scaffold.dart';
@@ -75,6 +76,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
             TextField(
               controller: target,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [AmountInputFormatter()],
               decoration: const InputDecoration(labelText: 'Target amount'),
             ),
           ],
@@ -85,10 +87,12 @@ class _SavingsScreenState extends State<SavingsScreen> {
         ],
       ),
     );
-    if (ok == true && name.text.trim().isNotEmpty && (double.tryParse(target.text) ?? 0) > 0) {
+    if (ok == true &&
+        name.text.trim().isNotEmpty &&
+        (parseFormattedAmount(target.text) ?? 0) > 0) {
       await widget.repository.createSavingsGoal(
         name: name.text.trim(),
-        targetAmount: double.parse(target.text),
+        targetAmount: parseFormattedAmount(target.text)!,
       );
       _reload();
     }
@@ -147,6 +151,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
               TextField(
                 controller: amount,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [AmountInputFormatter()],
                 decoration: InputDecoration(
                   labelText: 'Amount',
                   hintText:
@@ -167,7 +172,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
         ),
       ),
     );
-    final parsed = double.tryParse(amount.text);
+    final parsed = parseFormattedAmount(amount.text);
     if (ok == true && parsed != null && parsed > 0) {
       if (parsed > remaining) {
         if (!mounted) return;

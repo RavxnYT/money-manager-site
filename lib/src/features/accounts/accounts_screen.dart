@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/app_page_scaffold.dart';
@@ -97,6 +98,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 TextField(
                   controller: opening,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [AmountInputFormatter()],
                   decoration: const InputDecoration(labelText: 'Opening Balance'),
                 ),
               ],
@@ -114,7 +116,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
       await widget.repository.createAccount(
         name: name.text.trim(),
         type: type,
-        openingBalance: double.tryParse(opening.text.trim()) ?? 0,
+        openingBalance: parseFormattedAmount(opening.text.trim()) ?? 0,
         currencyCode: currencyCode,
       );
       if (!mounted) return;

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
+import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/app_page_scaffold.dart';
@@ -106,6 +106,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
                 TextField(
                   controller: amountController,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [AmountInputFormatter()],
                   decoration: const InputDecoration(labelText: 'Budget amount'),
                 ),
               ],
@@ -118,7 +119,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
         },
       ),
     );
-    final amount = double.tryParse(amountController.text);
+    final amount = parseFormattedAmount(amountController.text);
     if (ok == true && amount != null && amount > 0) {
       await widget.repository.upsertBudget(
         categoryId: selectedCategoryId,

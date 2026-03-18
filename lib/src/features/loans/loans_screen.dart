@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/app_page_scaffold.dart';
@@ -88,6 +89,7 @@ class _LoansScreenState extends State<LoansScreen> {
                 TextField(
                   controller: totalAmount,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [AmountInputFormatter()],
                   decoration: const InputDecoration(labelText: 'Total amount'),
                 ),
                 const SizedBox(height: 8),
@@ -137,7 +139,7 @@ class _LoansScreenState extends State<LoansScreen> {
       ),
     );
 
-    final amount = double.tryParse(totalAmount.text);
+    final amount = parseFormattedAmount(totalAmount.text);
     if (ok == true && personName.text.trim().isNotEmpty && amount != null && amount > 0) {
       try {
         await widget.repository.createLoan(
@@ -218,6 +220,7 @@ class _LoansScreenState extends State<LoansScreen> {
               TextField(
                 controller: amountController,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [AmountInputFormatter()],
                 decoration: InputDecoration(
                   labelText: 'Amount',
                   hintText:
@@ -255,7 +258,7 @@ class _LoansScreenState extends State<LoansScreen> {
       ),
     );
 
-    final amount = double.tryParse(amountController.text);
+    final amount = parseFormattedAmount(amountController.text);
     if (ok == true && amount != null && amount > 0) {
       if (amount > remaining) {
         if (!mounted) return;
@@ -337,6 +340,7 @@ class _LoansScreenState extends State<LoansScreen> {
                   controller: totalAmount,
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [AmountInputFormatter()],
                   decoration: InputDecoration(
                     labelText: 'Total amount',
                     helperText:
@@ -394,7 +398,7 @@ class _LoansScreenState extends State<LoansScreen> {
       ),
     );
 
-    final parsedTotal = double.tryParse(totalAmount.text);
+    final parsedTotal = parseFormattedAmount(totalAmount.text);
     if (ok == true &&
         parsedTotal != null &&
         parsedTotal > 0 &&

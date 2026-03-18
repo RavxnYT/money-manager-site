@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/currency/amount_input_formatter.dart';
 import '../../core/friendly_error.dart';
 import '../../core/notifications/notification_service.dart';
 import '../../core/ui/app_page_scaffold.dart';
@@ -136,6 +137,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
                   TextField(
                     controller: amount,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [AmountInputFormatter()],
                     decoration: const InputDecoration(labelText: 'Amount'),
                   ),
                   const SizedBox(height: 8),
@@ -183,7 +185,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
       ),
     );
 
-    final parsedAmount = double.tryParse(amount.text.trim());
+    final parsedAmount = parseFormattedAmount(amount.text.trim());
     if (ok == true && parsedAmount != null && parsedAmount > 0) {
       try {
         await widget.repository.createRecurringTransaction(

@@ -48,9 +48,14 @@ String formatMoney(
   num amount, {
   required String currencyCode,
 }) {
+  final upperCode = currencyCode.toUpperCase();
+  final symbol = upperCode == 'LBP' ? 'LBP ' : null;
   try {
-    return NumberFormat.simpleCurrency(name: currencyCode).format(amount);
+    return NumberFormat.currency(
+      name: upperCode,
+      symbol: symbol,
+    ).format(amount);
   } catch (_) {
-    return NumberFormat.currency(symbol: '$currencyCode ').format(amount);
+    return NumberFormat.currency(symbol: '${symbol ?? '$upperCode '}').format(amount);
   }
 }

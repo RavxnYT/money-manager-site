@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/currency/currency_utils.dart';
+import '../../core/currency/exchange_rate_service.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/animated_appear.dart';
 import '../../core/ui/app_page_scaffold.dart';
@@ -19,6 +21,8 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   late Future<_DashboardData> _future;
   String _currencyCode = 'USD';
+  List<String> _accountOrder = const [];
+  bool _isReorderingAccounts = false;
 
   @override
   void initState() {
@@ -43,6 +47,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     for (final account in accounts) {
       final balance = ((account['current_balance'] as num?) ?? 0).toDouble();
       final sourceCurrency = (account['currency_code'] ?? displayCurrency).toString();
+      final convertedForTotal = await _convertToTargetCurrency(
+        amount: balance,
+        sourceCurrencyCode: sourceCurrency,
+        targetCurrencyCode: displayCurrency,
+      );
       final converted = await widget.repository.convertAmountForDisplay(
         amount: balance,
         sourceCurrencyCode: sourceCurrency,
@@ -51,7 +60,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       account['display_currency'] = await widget.repository.displayCurrencyFor(
         sourceCurrencyCode: sourceCurrency,
       );
-      totalBalance += converted;
+      totalBalance += convertedForTotal;
     }
 
     double incomeMonth = 0;
@@ -64,14 +73,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final sourceCurrency = account is Map
           ? (Map<String, dynamic>.from(account)['currency_code'] ?? displayCurrency).toString()
           : displayCurrency;
-      final converted = await widget.repository.convertAmountForDisplay(
+      final convertedForSummary = await _convertToTargetCurrency(
         amount: amount,
         sourceCurrencyCode: sourceCurrency,
+        targetCurrencyCode: displayCurrency,
       );
       if (kind == 'income') {
-        incomeMonth += converted;
+        incomeMonth += convertedForSummary;
       } else {
-        expenseMonth += converted;
+        expenseMonth += convertedForSummary;
       }
     }
 
@@ -80,13 +90,94 @@ class _DashboardScreenState extends State<DashboardScreen> {
       (sum, item) => sum + (((item['current_amount'] as num?) ?? 0).toDouble()),
     );
 
+    final savedOrder = await _loadSavedAccountOrder();
+
     return _DashboardData(
       accounts: accounts,
       totalBalance: totalBalance,
       incomeMonth: incomeMonth,
       expenseMonth: expenseMonth,
       savingsTotal: savingsTotal,
+      savedAccountOrder: savedOrder,
     );
+  }
+
+  Future<double> _convertToTargetCurrency({
+    required double amount,
+    required String sourceCurrencyCode,
+    required String targetCurrencyCode,
+  }) async {
+    final source = sourceCurrencyCode.toUpperCase();
+    final target = targetCurrencyCode.toUpperCase();
+    if (source == target) return amount;
+    try {
+      final rate = await ExchangeRateService.instance.getRate(
+        fromCurrency: source,
+        toCurrency: target,
+      );
+      return amount * rate;
+    } catch (_) {
+      // Keep dashboard resilient if live exchange fetch fails.
+      return amount;
+    }
+  }
+
+  String get _accountOrderKey {
+    final userId = widget.repository.currentUser?.id ?? 'anonymous';
+    return 'dashboard_account_order_$userId';
+  }
+
+  Future<List<String>> _loadSavedAccountOrder() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_accountOrderKey) ?? const [];
+  }
+
+  Future<void> _saveAccountOrder(List<String> order) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_accountOrderKey, order);
+  }
+
+  List<String> _sanitizeOrder({
+    required List<String> rawOrder,
+    required List<Map<String, dynamic>> accounts,
+  }) {
+    final accountIds = accounts
+        .map((e) => (e['id'] ?? '').toString())
+        .where((id) => id.isNotEmpty)
+        .toList();
+    final seen = <String>{};
+    final cleaned = <String>[];
+    for (final id in rawOrder) {
+      if (accountIds.contains(id) && seen.add(id)) {
+        cleaned.add(id);
+      }
+    }
+    for (final id in accountIds) {
+      if (seen.add(id)) {
+        cleaned.add(id);
+      }
+    }
+    return cleaned;
+  }
+
+  List<Map<String, dynamic>> _orderedAccounts(
+    List<Map<String, dynamic>> accounts,
+    List<String> order,
+  ) {
+    if (order.isEmpty) return List<Map<String, dynamic>>.from(accounts);
+    final rank = <String, int>{};
+    for (var i = 0; i < order.length; i++) {
+      rank[order[i]] = i;
+    }
+    final sorted = List<Map<String, dynamic>>.from(accounts);
+    sorted.sort((a, b) {
+      final aId = (a['id'] ?? '').toString();
+      final bId = (b['id'] ?? '').toString();
+      final aRank = rank[aId] ?? 1 << 20;
+      final bRank = rank[bId] ?? 1 << 20;
+      return aRank.compareTo(bRank);
+    });
+    return sorted;
   }
 
   @override
@@ -119,6 +210,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           final expenseMonth = snapshot.data?.expenseMonth ?? 0;
           final savingsTotal = snapshot.data?.savingsTotal ?? 0;
           final netFlow = incomeMonth - expenseMonth;
+          final savedOrder = snapshot.data?.savedAccountOrder ?? const <String>[];
+          final effectiveOrder = _sanitizeOrder(
+            rawOrder: _accountOrder.isNotEmpty ? _accountOrder : savedOrder,
+            accounts: accounts,
+          );
+          final orderedAccounts = _orderedAccounts(accounts, effectiveOrder);
 
           return ListView(
             padding: const EdgeInsets.fromLTRB(2, 12, 2, 120),
@@ -185,16 +282,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 color: const Color(0xFF4A5DCB),
               )),
               const SizedBox(height: 12),
-              Text('Accounts', style: Theme.of(context).textTheme.titleMedium),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Accounts',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  if (orderedAccounts.isNotEmpty)
+                    TextButton.icon(
+                      onPressed: () async {
+                        if (_isReorderingAccounts) {
+                          await _saveAccountOrder(effectiveOrder);
+                        }
+                        if (!mounted) return;
+                        setState(() {
+                          _isReorderingAccounts = !_isReorderingAccounts;
+                          _accountOrder = effectiveOrder;
+                        });
+                      },
+                      icon: Icon(
+                        _isReorderingAccounts ? Icons.check_rounded : Icons.edit_outlined,
+                        size: 18,
+                      ),
+                      label: Text(_isReorderingAccounts ? 'Done' : 'Edit'),
+                    ),
+                ],
+              ),
               const SizedBox(height: 6),
-              if (accounts.isEmpty)
+              if (orderedAccounts.isEmpty)
                 const GlassPanel(
                   child: Padding(
                     padding: EdgeInsets.all(14),
                     child: Text('No accounts yet. Add one from Settings -> Manage Accounts.'),
                   ),
                 ),
-              ...accounts.map((account) {
+              if (!_isReorderingAccounts)
+                ...orderedAccounts.map((account) {
                 final name = (account['name'] ?? '').toString();
                 final type = (account['type'] ?? '').toString().toUpperCase();
                 final balance = ((account['display_balance'] as num?) ?? (account['current_balance'] as num?) ?? 0).toDouble();
@@ -221,6 +346,60 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 );
               }),
+              if (_isReorderingAccounts && orderedAccounts.isNotEmpty)
+                ReorderableListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  buildDefaultDragHandles: true,
+                  itemCount: orderedAccounts.length,
+                  onReorder: (oldIndex, newIndex) async {
+                    final ids = orderedAccounts
+                        .map((e) => (e['id'] ?? '').toString())
+                        .where((id) => id.isNotEmpty)
+                        .toList();
+                    if (newIndex > oldIndex) {
+                      newIndex -= 1;
+                    }
+                    final moved = ids.removeAt(oldIndex);
+                    ids.insert(newIndex, moved);
+                    if (!mounted) return;
+                    setState(() {
+                      _accountOrder = ids;
+                    });
+                    await _saveAccountOrder(ids);
+                  },
+                  itemBuilder: (context, index) {
+                    final account = orderedAccounts[index];
+                    final id = (account['id'] ?? '').toString();
+                    final name = (account['name'] ?? '').toString();
+                    final type = (account['type'] ?? '').toString().toUpperCase();
+                    final balance = ((account['display_balance'] as num?) ??
+                            (account['current_balance'] as num?) ??
+                            0)
+                        .toDouble();
+                    final accountCurrency =
+                        (account['currency_code'] ?? _currencyCode).toString();
+                    final displayCurrency =
+                        (account['display_currency'] ?? accountCurrency).toString();
+                    return GlassPanel(
+                      key: ValueKey('account-$id'),
+                      child: ListTile(
+                        contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                        leading: const Icon(Icons.drag_handle_rounded),
+                        title: Text(name,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Text(type,
+                            style: const TextStyle(color: Colors.white70)),
+                        trailing: Text(
+                          formatMoney(balance, currencyCode: displayCurrency),
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    );
+                  },
+                ),
             ],
           );
             },
@@ -275,6 +454,7 @@ class _DashboardData {
     required this.incomeMonth,
     required this.expenseMonth,
     required this.savingsTotal,
+    required this.savedAccountOrder,
   });
 
   final List<Map<String, dynamic>> accounts;
@@ -282,4 +462,5 @@ class _DashboardData {
   final double incomeMonth;
   final double expenseMonth;
   final double savingsTotal;
+  final List<String> savedAccountOrder;
 }

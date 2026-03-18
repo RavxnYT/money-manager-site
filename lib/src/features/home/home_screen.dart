@@ -272,36 +272,58 @@ class _HomeScreenState extends State<HomeScreen> {
             top: BorderSide(color: Colors.white.withOpacity(0.08)),
           ),
         ),
-        child: NavigationBar(
-          selectedIndex: _currentIndex,
-          destinations: const [
-            NavigationDestination(
+        child: Theme(
+          data: Theme.of(context).copyWith(
+            splashColor: Colors.transparent,
+            highlightColor: Colors.transparent,
+          ),
+          child: BottomNavigationBar(
+            currentIndex: _currentIndex,
+            type: BottomNavigationBarType.fixed,
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            selectedItemColor: Colors.white,
+            unselectedItemColor: Colors.white70,
+            selectedFontSize: 10,
+            unselectedFontSize: 10,
+            selectedLabelStyle:
+                const TextStyle(fontWeight: FontWeight.w700, height: 1.0),
+            unselectedLabelStyle:
+                const TextStyle(fontWeight: FontWeight.w500, height: 1.0),
+            items: const [
+              BottomNavigationBarItem(
                 icon: Icon(Icons.dashboard_outlined),
-                selectedIcon: Icon(Icons.dashboard),
-                label: 'Dashboard'),
-            NavigationDestination(
+                activeIcon: Icon(Icons.dashboard),
+                label: 'Dashboard',
+              ),
+              BottomNavigationBarItem(
                 icon: Icon(Icons.swap_horiz_outlined),
-                selectedIcon: Icon(Icons.swap_horiz),
-                label: 'Transactions'),
-            NavigationDestination(
+                activeIcon: Icon(Icons.swap_horiz),
+                label: 'Transactions',
+              ),
+              BottomNavigationBarItem(
                 icon: Icon(Icons.insights_outlined),
-                selectedIcon: Icon(Icons.insights),
-                label: 'Reports'),
-            NavigationDestination(
+                activeIcon: Icon(Icons.insights),
+                label: 'Reports',
+              ),
+              BottomNavigationBarItem(
                 icon: Icon(Icons.savings_outlined),
-                selectedIcon: Icon(Icons.savings),
-                label: 'Savings'),
-            NavigationDestination(
+                activeIcon: Icon(Icons.savings),
+                label: 'Savings',
+              ),
+              BottomNavigationBarItem(
                 icon: Icon(Icons.people_outline),
-                selectedIcon: Icon(Icons.people),
-                label: 'Loans'),
-            NavigationDestination(
+                activeIcon: Icon(Icons.people),
+                label: 'Loans',
+              ),
+              BottomNavigationBarItem(
                 icon: Icon(Icons.settings_outlined),
-                selectedIcon: Icon(Icons.settings),
-                label: 'Settings'),
-          ],
-          onDestinationSelected: (value) =>
-              setState(() => _currentIndex = value),
+                activeIcon: Icon(Icons.settings),
+                label: 'Settings',
+              ),
+            ],
+            onTap: (value) => setState(() => _currentIndex = value),
+          ),
         ),
       ),
     );

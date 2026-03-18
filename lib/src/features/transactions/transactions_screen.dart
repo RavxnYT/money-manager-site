@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/app_page_scaffold.dart';
@@ -388,14 +389,8 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
     _load();
   }
 
-  String _normalizeAmountText(String value) {
-    return value.replaceAll(' ', '').replaceAll(',', '');
-  }
-
   double? _parseAmountInput(String? value) {
-    final normalized = _normalizeAmountText((value ?? '').trim());
-    if (normalized.isEmpty) return null;
-    return double.tryParse(normalized);
+    return parseFormattedAmount(value);
   }
 
   String? _accountCurrencyById(String? accountId) {
@@ -640,6 +635,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                   controller: _amountController,
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [AmountInputFormatter()],
                   decoration: const InputDecoration(labelText: 'Amount'),
                   onChanged: (_) => _refreshConversionPreview(),
                   validator: (value) {
