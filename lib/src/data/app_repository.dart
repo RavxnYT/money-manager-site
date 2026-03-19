@@ -39,15 +39,60 @@ class AppRepository {
     'Rent',
     'Bills',
     'Health',
-    'Shopping',
+    'Utilities',
+    'Groceries',
+    'Dining Out',
+    'Coffee',
+    'Pharmacy',
+    'Insurance',
+    'Education',
+    'Childcare',
+    'Pets',
+    'Home Maintenance',
+    'Electronics',
+    'Mobile & Internet',
+    'Subscriptions',
+    'Streaming',
+    'Travel',
+    'Fuel',
+    'Parking',
+    'Taxi',
+    'Public Transport',
+    'Gifts',
+    'Donations',
+    'Beauty',
+    'Fitness',
+    'Sports',
+    'Clothing',
+    'Shoes',
+    'Taxes',
+    'Fees',
+    'Loan Payment',
+    'Debt Payment',
     'Entertainment',
+    'Shopping',
+    'Other',
   ];
   static const List<String> _defaultIncomeCategories = [
     'Salary',
     'Business',
     'Freelance',
     'Investments',
+    'Interest',
+    'Dividends',
     'Bonus',
+    'Commission',
+    'Overtime',
+    'Rental Income',
+    'Refund',
+    'Cashback',
+    'Gift Received',
+    'Sale',
+    'Side Hustle',
+    'Allowance',
+    'Pension',
+    'Scholarship',
+    'Other',
   ];
 
   bool _isSyncing = false;
@@ -115,6 +160,22 @@ class AppRepository {
       'record_support_event',
       params: {'p_user_id': user.id},
     );
+  }
+
+  Future<void> ensureDefaultCategories() async {
+    final user = currentUser;
+    if (user == null) return;
+    try {
+      await _client.rpc(
+        'seed_default_categories',
+        params: {'p_user_id': user.id},
+      );
+      await _removeCachedKey(_cacheKey('categories:income'));
+      await _removeCachedKey(_cacheKey('categories:expense'));
+      _notifyDataChanged();
+    } catch (_) {
+      // Non-blocking best effort. User can still use the app normally.
+    }
   }
 
   Future<Map<String, int>> fetchSupportStats() async {
@@ -371,6 +432,8 @@ class AppRepository {
                 name: (resolved['name'] ?? '').toString(),
                 type: (resolved['type'] ?? 'cash').toString(),
                 currencyCode: (resolved['currency_code'] ?? 'USD').toString(),
+                currentBalance:
+                    (resolved['current_balance'] as num?)?.toDouble(),
               );
               cacheChanged = true;
               break;
@@ -447,6 +510,7 @@ class AppRepository {
                 name: (payload['name'] ?? '').toString(),
                 targetAmount:
                     ((payload['target_amount'] as num?) ?? 0).toDouble(),
+                currencyCode: (payload['currency_code'] ?? 'USD').toString(),
                 targetDate: payload['target_date'] == null
                     ? null
                     : DateTime.tryParse(payload['target_date'].toString()),
@@ -513,10 +577,8 @@ class AppRepository {
                 personName: (payload['person_name'] ?? '').toString(),
                 totalAmount:
                     ((payload['total_amount'] as num?) ?? 0).toDouble(),
-                direction:
-                    (payload['direction'] ?? 'owed_to_me').toString(),
-                currencyCode:
-                    (payload['currency_code'] ?? 'USD').toString(),
+                direction: (payload['direction'] ?? 'owed_to_me').toString(),
+                currencyCode: (payload['currency_code'] ?? 'USD').toString(),
                 note: payload['note']?.toString(),
                 dueDate: payload['due_date'] == null
                     ? null
@@ -535,8 +597,7 @@ class AppRepository {
                 totalAmount:
                     ((payload['total_amount'] as num?) ?? 0).toDouble(),
                 direction: (payload['direction'] ?? 'owed_to_me').toString(),
-                currencyCode:
-                    (payload['currency_code'] ?? 'USD').toString(),
+                currencyCode: (payload['currency_code'] ?? 'USD').toString(),
                 note: payload['note']?.toString(),
                 dueDate: payload['due_date'] == null
                     ? null
@@ -556,8 +617,7 @@ class AppRepository {
               }
               await _addLoanPaymentRemote(
                 loanId: (resolvedLoan['loan_id'] ?? '').toString(),
-                amount:
-                    ((resolvedLoan['amount'] as num?) ?? 0).toDouble(),
+                amount: ((resolvedLoan['amount'] as num?) ?? 0).toDouble(),
                 accountId: (resolvedLoan['account_id'] ?? '').toString(),
                 paymentDate: DateTime.parse(
                   (resolvedLoan['payment_date'] ??
@@ -870,6 +930,7 @@ class AppRepository {
     required String name,
     required String type,
     required String currencyCode,
+    double? currentBalance,
   }) async {
     try {
       await _updateAccountRemote(
@@ -877,6 +938,7 @@ class AppRepository {
         name: name,
         type: type,
         currencyCode: currencyCode,
+        currentBalance: currentBalance,
       );
       await _removeCachedKey(_cacheKey('accounts'));
     } catch (error) {
@@ -886,6 +948,7 @@ class AppRepository {
         'name': name,
         'type': type,
         'currency_code': currencyCode,
+        if (currentBalance != null) 'current_balance': currentBalance,
       });
       final cached = await _readCachedList(_cacheKey('accounts'));
       for (final row in cached) {
@@ -893,6 +956,9 @@ class AppRepository {
           row['name'] = name;
           row['type'] = type;
           row['currency_code'] = currencyCode;
+          if (currentBalance != null) {
+            row['current_balance'] = currentBalance;
+          }
         }
       }
       await _writeCachedList(_cacheKey('accounts'), cached);
@@ -905,16 +971,21 @@ class AppRepository {
     required String name,
     required String type,
     required String currencyCode,
+    double? currentBalance,
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final updateData = <String, dynamic>{
+      'name': name,
+      'type': type,
+      'currency_code': currencyCode,
+    };
+    if (currentBalance != null) {
+      updateData['current_balance'] = currentBalance;
+    }
     await _client
         .from('accounts')
-        .update({
-          'name': name,
-          'type': type,
-          'currency_code': currencyCode,
-        })
+        .update(updateData)
         .eq('id', accountId)
         .eq('user_id', user.id);
   }
@@ -1421,6 +1492,7 @@ class AppRepository {
   Future<void> createSavingsGoal({
     required String name,
     required double targetAmount,
+    String currencyCode = 'USD',
     DateTime? targetDate,
   }) async {
     final localId = _newLocalId('goal');
@@ -1428,6 +1500,7 @@ class AppRepository {
       await _createSavingsGoalRemote(
         name: name,
         targetAmount: targetAmount,
+        currencyCode: currencyCode,
         targetDate: targetDate,
       );
       await _removeCachedKey(_cacheKey('savings_goals'));
@@ -1437,6 +1510,7 @@ class AppRepository {
         'local_id': localId,
         'name': name,
         'target_amount': targetAmount,
+        'currency_code': currencyCode,
         'target_date': targetDate?.toIso8601String(),
       });
       final cached = await _readCachedList(_cacheKey('savings_goals'));
@@ -1445,6 +1519,7 @@ class AppRepository {
         'name': name,
         'target_amount': targetAmount,
         'current_amount': 0,
+        'currency_code': currencyCode.toUpperCase(),
         'target_date': targetDate?.toIso8601String(),
         'created_at': DateTime.now().toIso8601String(),
       });
@@ -1455,6 +1530,7 @@ class AppRepository {
   Future<String> _createSavingsGoalRemote({
     required String name,
     required double targetAmount,
+    required String currencyCode,
     DateTime? targetDate,
   }) async {
     final user = currentUser;
@@ -1465,6 +1541,7 @@ class AppRepository {
           'user_id': user.id,
           'name': name,
           'target_amount': targetAmount,
+          'currency_code': currencyCode.toUpperCase(),
           'target_date': targetDate?.toIso8601String(),
         })
         .select('id')
@@ -1544,6 +1621,102 @@ class AppRepository {
     if (user == null) return;
     await _client.rpc(
       'add_savings_progress',
+      params: {
+        'p_user_id': user.id,
+        'p_goal_id': goalId,
+        'p_amount': amount,
+        'p_account_id': accountId,
+        'p_note': note,
+      },
+    );
+  }
+
+  Future<void> updateSavingsGoal({
+    required String goalId,
+    required String name,
+    required double targetAmount,
+    required String currencyCode,
+  }) async {
+    final current = await fetchSavingsGoals();
+    final goal = current.firstWhere(
+      (row) => row['id']?.toString() == goalId,
+      orElse: () => <String, dynamic>{},
+    );
+    final currentAmount = ((goal['current_amount'] as num?) ?? 0).toDouble();
+    if (targetAmount < currentAmount) {
+      throw Exception(
+          'Target cannot be lower than current savings (${currentAmount.toStringAsFixed(2)}).');
+    }
+    try {
+      await _updateSavingsGoalRemote(
+        goalId: goalId,
+        name: name,
+        targetAmount: targetAmount,
+        currencyCode: currencyCode,
+      );
+      await _removeCachedKey(_cacheKey('savings_goals'));
+    } catch (error) {
+      if (!_isNetworkError(error)) rethrow;
+      throw Exception('Cannot edit savings goal while offline.');
+    }
+    _notifyDataChanged();
+  }
+
+  Future<void> _updateSavingsGoalRemote({
+    required String goalId,
+    required String name,
+    required double targetAmount,
+    required String currencyCode,
+  }) async {
+    final user = currentUser;
+    if (user == null) return;
+    await _client.rpc(
+      'update_savings_goal',
+      params: {
+        'p_user_id': user.id,
+        'p_goal_id': goalId,
+        'p_name': name,
+        'p_target_amount': targetAmount,
+        'p_currency_code': currencyCode.toUpperCase(),
+      },
+    );
+  }
+
+  Future<void> refundSavingsProgress({
+    required String goalId,
+    required double amount,
+    required String accountId,
+    String? note,
+  }) async {
+    try {
+      await _refundSavingsProgressRemote(
+        goalId: goalId,
+        amount: amount,
+        accountId: accountId,
+        note: note,
+      );
+      await _removeCachedKey(_cacheKey('savings_goals'));
+      await _removeCachedKey(_cacheKey('savings_goal_contributions'));
+      await _removeCachedKey(_cacheKey('accounts'));
+      await _removeCachedKey(_cacheKey('transactions'));
+      await _clearTransactionsMonthCaches();
+    } catch (error) {
+      if (!_isNetworkError(error)) rethrow;
+      throw Exception('Cannot refund savings while offline.');
+    }
+    _notifyDataChanged();
+  }
+
+  Future<void> _refundSavingsProgressRemote({
+    required String goalId,
+    required double amount,
+    required String accountId,
+    String? note,
+  }) async {
+    final user = currentUser;
+    if (user == null) return;
+    await _client.rpc(
+      'refund_savings_progress',
       params: {
         'p_user_id': user.id,
         'p_goal_id': goalId,
@@ -2154,8 +2327,16 @@ class AppRepository {
   Future<void> deleteLoan(String loanId) async {
     final user = currentUser;
     if (user == null) return;
-    await _client.from('loan_payments').delete().eq('loan_id', loanId).eq('user_id', user.id);
-    await _client.from('loans').delete().eq('id', loanId).eq('user_id', user.id);
+    await _client
+        .from('loan_payments')
+        .delete()
+        .eq('loan_id', loanId)
+        .eq('user_id', user.id);
+    await _client
+        .from('loans')
+        .delete()
+        .eq('id', loanId)
+        .eq('user_id', user.id);
     await _removeCachedKey(_cacheKey('loans'));
     await _removeCachedKey(_cacheKey('loan_payments'));
     _notifyDataChanged();

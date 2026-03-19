@@ -82,12 +82,15 @@ create table if not exists public.savings_goals (
   name text not null,
   target_amount numeric(14, 2) not null check (target_amount > 0),
   current_amount numeric(14, 2) not null default 0 check (current_amount >= 0),
+  currency_code text not null default 'USD',
   target_date date,
   is_completed boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 create index if not exists idx_goals_user on public.savings_goals(user_id);
+alter table if exists public.savings_goals
+add column if not exists currency_code text not null default 'USD';
 
 create table if not exists public.recurring_transactions (
   id uuid primary key default uuid_generate_v4(),
@@ -124,11 +127,15 @@ create table if not exists public.savings_goal_contributions (
   user_id uuid not null references public.profiles(id) on delete cascade,
   goal_id uuid not null references public.savings_goals(id) on delete cascade,
   account_id uuid not null references public.accounts(id) on delete restrict,
-  amount numeric(14, 2) not null check (amount > 0),
+  amount numeric(14, 2) not null check (amount <> 0),
   note text,
   created_at timestamptz not null default now()
 );
 create index if not exists idx_savings_contrib_user_goal on public.savings_goal_contributions(user_id, goal_id, created_at desc);
+alter table if exists public.savings_goal_contributions
+drop constraint if exists savings_goal_contributions_amount_check;
+alter table if exists public.savings_goal_contributions
+add constraint savings_goal_contributions_amount_check check (amount <> 0);
 
 create table if not exists public.loans (
   id uuid primary key default uuid_generate_v4(),
@@ -216,12 +223,61 @@ begin
   insert into public.categories (user_id, name, type, is_default) values
     (p_user_id, 'Salary', 'income', true),
     (p_user_id, 'Business', 'income', true),
+    (p_user_id, 'Freelance', 'income', true),
     (p_user_id, 'Investments', 'income', true),
+    (p_user_id, 'Interest', 'income', true),
+    (p_user_id, 'Dividends', 'income', true),
+    (p_user_id, 'Bonus', 'income', true),
+    (p_user_id, 'Commission', 'income', true),
+    (p_user_id, 'Overtime', 'income', true),
+    (p_user_id, 'Rental Income', 'income', true),
+    (p_user_id, 'Refund', 'income', true),
+    (p_user_id, 'Cashback', 'income', true),
+    (p_user_id, 'Gift Received', 'income', true),
+    (p_user_id, 'Sale', 'income', true),
+    (p_user_id, 'Side Hustle', 'income', true),
+    (p_user_id, 'Allowance', 'income', true),
+    (p_user_id, 'Pension', 'income', true),
+    (p_user_id, 'Scholarship', 'income', true),
+    (p_user_id, 'Other', 'income', true),
     (p_user_id, 'Food', 'expense', true),
+    (p_user_id, 'Groceries', 'expense', true),
+    (p_user_id, 'Dining Out', 'expense', true),
+    (p_user_id, 'Coffee', 'expense', true),
     (p_user_id, 'Transport', 'expense', true),
+    (p_user_id, 'Fuel', 'expense', true),
+    (p_user_id, 'Parking', 'expense', true),
+    (p_user_id, 'Taxi', 'expense', true),
+    (p_user_id, 'Public Transport', 'expense', true),
     (p_user_id, 'Rent', 'expense', true),
     (p_user_id, 'Bills', 'expense', true),
-    (p_user_id, 'Health', 'expense', true)
+    (p_user_id, 'Utilities', 'expense', true),
+    (p_user_id, 'Mobile & Internet', 'expense', true),
+    (p_user_id, 'Health', 'expense', true),
+    (p_user_id, 'Pharmacy', 'expense', true),
+    (p_user_id, 'Insurance', 'expense', true),
+    (p_user_id, 'Education', 'expense', true),
+    (p_user_id, 'Childcare', 'expense', true),
+    (p_user_id, 'Pets', 'expense', true),
+    (p_user_id, 'Home Maintenance', 'expense', true),
+    (p_user_id, 'Electronics', 'expense', true),
+    (p_user_id, 'Subscriptions', 'expense', true),
+    (p_user_id, 'Streaming', 'expense', true),
+    (p_user_id, 'Travel', 'expense', true),
+    (p_user_id, 'Gifts', 'expense', true),
+    (p_user_id, 'Donations', 'expense', true),
+    (p_user_id, 'Beauty', 'expense', true),
+    (p_user_id, 'Fitness', 'expense', true),
+    (p_user_id, 'Sports', 'expense', true),
+    (p_user_id, 'Clothing', 'expense', true),
+    (p_user_id, 'Shoes', 'expense', true),
+    (p_user_id, 'Taxes', 'expense', true),
+    (p_user_id, 'Fees', 'expense', true),
+    (p_user_id, 'Loan Payment', 'expense', true),
+    (p_user_id, 'Debt Payment', 'expense', true),
+    (p_user_id, 'Entertainment', 'expense', true),
+    (p_user_id, 'Shopping', 'expense', true),
+    (p_user_id, 'Other', 'expense', true)
   on conflict (user_id, name, type) do nothing;
 end;
 $$;
@@ -353,15 +409,17 @@ set search_path = public
 as $$
 declare
   v_current_balance numeric;
+  v_account_currency text;
   v_goal_name text;
   v_goal_current numeric;
   v_goal_target numeric;
+  v_goal_currency text;
 begin
   if auth.uid() is null or auth.uid() <> p_user_id then
     raise exception 'Unauthorized';
   end if;
 
-  select current_balance into v_current_balance
+  select current_balance, currency_code into v_current_balance, v_account_currency
   from public.accounts
   where id = p_account_id and user_id = p_user_id;
 
@@ -373,13 +431,17 @@ begin
     raise exception 'Insufficient balance in selected account';
   end if;
 
-  select name, current_amount, target_amount
-  into v_goal_name, v_goal_current, v_goal_target
+  select name, current_amount, target_amount, currency_code
+  into v_goal_name, v_goal_current, v_goal_target, v_goal_currency
   from public.savings_goals
   where id = p_goal_id and user_id = p_user_id;
 
   if v_goal_name is null then
     raise exception 'Savings goal not found';
+  end if;
+
+  if upper(coalesce(v_account_currency, '')) <> upper(coalesce(v_goal_currency, '')) then
+    raise exception 'Selected account currency must match savings goal currency';
   end if;
 
   if (v_goal_current + p_amount) > v_goal_target then
@@ -410,6 +472,138 @@ begin
     'expense',
     p_amount,
     coalesce(p_note, 'Savings contribution: ' || v_goal_name),
+    current_date,
+    null
+  );
+end;
+$$;
+
+create or replace function public.update_savings_goal(
+  p_user_id uuid,
+  p_goal_id uuid,
+  p_name text,
+  p_target_amount numeric,
+  p_currency_code text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_current_amount numeric;
+  v_existing_currency text;
+begin
+  if auth.uid() is null or auth.uid() <> p_user_id then
+    raise exception 'Unauthorized';
+  end if;
+
+  select current_amount, currency_code
+  into v_current_amount, v_existing_currency
+  from public.savings_goals
+  where id = p_goal_id and user_id = p_user_id;
+
+  if v_current_amount is null then
+    raise exception 'Savings goal not found';
+  end if;
+
+  if p_target_amount <= 0 then
+    raise exception 'Target amount must be greater than 0';
+  end if;
+
+  if p_target_amount < v_current_amount then
+    raise exception 'Target amount cannot be lower than current savings';
+  end if;
+
+  if upper(coalesce(v_existing_currency, '')) <> upper(coalesce(p_currency_code, ''))
+     and v_current_amount > 0 then
+    raise exception 'Cannot change currency for a goal that already has saved funds';
+  end if;
+
+  update public.savings_goals
+  set name = p_name,
+      target_amount = p_target_amount,
+      currency_code = upper(p_currency_code),
+      is_completed = current_amount >= p_target_amount
+  where id = p_goal_id and user_id = p_user_id;
+end;
+$$;
+
+create or replace function public.refund_savings_progress(
+  p_user_id uuid,
+  p_goal_id uuid,
+  p_amount numeric,
+  p_account_id uuid,
+  p_note text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_goal_name text;
+  v_goal_current numeric;
+  v_goal_currency text;
+  v_account_currency text;
+begin
+  if auth.uid() is null or auth.uid() <> p_user_id then
+    raise exception 'Unauthorized';
+  end if;
+
+  if p_amount <= 0 then
+    raise exception 'Refund amount must be greater than 0';
+  end if;
+
+  select name, current_amount, currency_code
+  into v_goal_name, v_goal_current, v_goal_currency
+  from public.savings_goals
+  where id = p_goal_id and user_id = p_user_id;
+
+  if v_goal_name is null then
+    raise exception 'Savings goal not found';
+  end if;
+
+  if v_goal_current < p_amount then
+    raise exception 'Refund amount exceeds current savings';
+  end if;
+
+  select currency_code into v_account_currency
+  from public.accounts
+  where id = p_account_id and user_id = p_user_id;
+
+  if v_account_currency is null then
+    raise exception 'Account not found';
+  end if;
+
+  if upper(coalesce(v_account_currency, '')) <> upper(coalesce(v_goal_currency, '')) then
+    raise exception 'Selected account currency must match savings goal currency';
+  end if;
+
+  update public.savings_goals
+  set current_amount = current_amount - p_amount,
+      is_completed = (current_amount - p_amount) >= target_amount
+  where id = p_goal_id and user_id = p_user_id;
+
+  update public.accounts
+  set current_balance = current_balance + p_amount
+  where id = p_account_id and user_id = p_user_id;
+
+  insert into public.savings_goal_contributions (
+    user_id, goal_id, account_id, amount, note
+  ) values (
+    p_user_id, p_goal_id, p_account_id, -p_amount, coalesce(p_note, 'Savings refund')
+  );
+
+  insert into public.transactions (
+    user_id, account_id, category_id, kind, amount, note, transaction_date, transfer_account_id
+  ) values (
+    p_user_id,
+    p_account_id,
+    null,
+    'income',
+    p_amount,
+    coalesce(p_note, 'Savings refund: ' || v_goal_name),
     current_date,
     null
   );
@@ -625,7 +819,6 @@ begin
   if not found then
     raise exception 'Bill reminder not found';
   end if;
-android-app-bundle
   perform public.create_transaction(
     p_user_id,
     r.account_id,

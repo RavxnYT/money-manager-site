@@ -64,27 +64,42 @@ class _SavingsScreenState extends State<SavingsScreen> {
   Future<void> _createGoal() async {
     final name = TextEditingController();
     final target = TextEditingController();
+    String goalCurrency = _currencyCode;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Create Savings Goal'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: name, decoration: const InputDecoration(labelText: 'Goal name')),
-            const SizedBox(height: 8),
-            TextField(
-              controller: target,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [AmountInputFormatter()],
-              decoration: const InputDecoration(labelText: 'Target amount'),
-            ),
+      builder: (_) => StatefulBuilder(
+        builder: (context, setInnerState) => AlertDialog(
+          title: const Text('Create Savings Goal'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: name, decoration: const InputDecoration(labelText: 'Goal name')),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: goalCurrency,
+                decoration: const InputDecoration(labelText: 'Savings currency'),
+                items: supportedCurrencyCodes
+                    .map((code) => DropdownMenuItem<String>(value: code, child: Text(code)))
+                    .toList(),
+                onChanged: (value) {
+                  if (value == null) return;
+                  setInnerState(() => goalCurrency = value);
+                },
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: target,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [AmountInputFormatter()],
+                decoration: const InputDecoration(labelText: 'Target amount'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
-        ],
       ),
     );
     if (ok == true &&
@@ -93,6 +108,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
       await widget.repository.createSavingsGoal(
         name: name.text.trim(),
         targetAmount: parseFormattedAmount(target.text)!,
+        currencyCode: goalCurrency,
       );
       _reload();
     }
@@ -100,6 +116,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
 
   Future<void> _addProgress(Map<String, dynamic> goal) async {
     final goalId = goal['id']?.toString() ?? '';
+    final goalCurrency = (goal['currency_code'] ?? _currencyCode).toString().toUpperCase();
     final current = ((goal['current_amount'] as num?) ?? 0).toDouble();
     final target = ((goal['target_amount'] as num?) ?? 0).toDouble();
     final remaining = (target - current).clamp(0, double.infinity);
@@ -110,11 +127,16 @@ class _SavingsScreenState extends State<SavingsScreen> {
       );
       return;
     }
-    final accounts = await widget.repository.fetchAccounts();
+    final accounts = (await widget.repository.fetchAccounts())
+        .where((row) =>
+            (row['currency_code'] ?? '').toString().toUpperCase() == goalCurrency)
+        .toList();
     if (!mounted) return;
     if (accounts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please create an account first.')),
+        SnackBar(
+          content: Text('Create an account in $goalCurrency first to fund this goal.'),
+        ),
       );
       return;
     }
@@ -155,7 +177,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
                 decoration: InputDecoration(
                   labelText: 'Amount',
                   hintText:
-                      'Remaining: ${formatMoney(remaining, currencyCode: _currencyCode)}',
+                      'Remaining: ${formatMoney(remaining, currencyCode: goalCurrency)}',
                 ),
               ),
               const SizedBox(height: 8),
@@ -179,7 +201,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Amount exceeds remaining goal amount (${formatMoney(remaining, currencyCode: _currencyCode)}).',
+              'Amount exceeds remaining goal amount (${formatMoney(remaining, currencyCode: goalCurrency)}).',
             ),
           ),
         );
@@ -193,6 +215,189 @@ class _SavingsScreenState extends State<SavingsScreen> {
           note: note.text.trim().isEmpty ? null : note.text.trim(),
         );
         _reload();
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyErrorMessage(e))),
+        );
+      }
+    }
+  }
+
+  Future<void> _editGoal(Map<String, dynamic> goal) async {
+    final goalId = goal['id']?.toString() ?? '';
+    final name = TextEditingController(text: (goal['name'] ?? '').toString());
+    final target = TextEditingController(
+      text: (((goal['target_amount'] as num?) ?? 0).toDouble()).toStringAsFixed(2),
+    );
+    String currencyCode = (goal['currency_code'] ?? _currencyCode).toString().toUpperCase();
+    final current = ((goal['current_amount'] as num?) ?? 0).toDouble();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setInnerState) => AlertDialog(
+          title: const Text('Edit Savings Goal'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: name,
+                decoration: const InputDecoration(labelText: 'Goal name'),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: currencyCode,
+                decoration: const InputDecoration(labelText: 'Savings currency'),
+                items: supportedCurrencyCodes
+                    .map((code) => DropdownMenuItem<String>(value: code, child: Text(code)))
+                    .toList(),
+                onChanged: (value) {
+                  if (value == null) return;
+                  setInnerState(() => currencyCode = value);
+                },
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: target,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [AmountInputFormatter()],
+                decoration: InputDecoration(
+                  labelText: 'Target amount',
+                  helperText:
+                      'Current saved: ${formatMoney(current, currencyCode: currencyCode)}',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
+          ],
+        ),
+      ),
+    );
+    final parsedTarget = parseFormattedAmount(target.text);
+    if (ok == true &&
+        goalId.isNotEmpty &&
+        name.text.trim().isNotEmpty &&
+        parsedTarget != null &&
+        parsedTarget > 0) {
+      try {
+        await widget.repository.updateSavingsGoal(
+          goalId: goalId,
+          name: name.text.trim(),
+          targetAmount: parsedTarget,
+          currencyCode: currencyCode,
+        );
+        await _reload();
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyErrorMessage(e))),
+        );
+      }
+    }
+  }
+
+  Future<void> _refundProgress(Map<String, dynamic> goal) async {
+    final goalId = goal['id']?.toString() ?? '';
+    final goalName = (goal['name'] ?? '').toString();
+    final goalCurrency = (goal['currency_code'] ?? _currencyCode).toString().toUpperCase();
+    final current = ((goal['current_amount'] as num?) ?? 0).toDouble();
+    if (current <= 0) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No saved amount to refund for this goal.')),
+      );
+      return;
+    }
+
+    final accounts = (await widget.repository.fetchAccounts())
+        .where((row) =>
+            (row['currency_code'] ?? '').toString().toUpperCase() == goalCurrency)
+        .toList();
+    if (!mounted) return;
+    if (accounts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Create an account in $goalCurrency to receive refunds.'),
+        ),
+      );
+      return;
+    }
+    String selectedAccountId = accounts.first['id'].toString();
+    final amount = TextEditingController();
+    final note = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setInnerState) => AlertDialog(
+          title: Text('Refund Savings • $goalName'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                value: selectedAccountId,
+                items: accounts
+                    .map((e) => DropdownMenuItem<String>(
+                          value: e['id'].toString(),
+                          child: Text((e['name'] ?? '').toString()),
+                        ))
+                    .toList(),
+                onChanged: (value) {
+                  setInnerState(() {
+                    selectedAccountId = value ?? selectedAccountId;
+                  });
+                },
+                decoration: const InputDecoration(labelText: 'Refund to account'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: amount,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [AmountInputFormatter()],
+                decoration: InputDecoration(
+                  labelText: 'Amount',
+                  hintText:
+                      'Available to refund: ${formatMoney(current, currencyCode: goalCurrency)}',
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: note,
+                decoration: const InputDecoration(labelText: 'Note (optional)'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Refund')),
+          ],
+        ),
+      ),
+    );
+
+    final parsed = parseFormattedAmount(amount.text);
+    if (ok == true && parsed != null && parsed > 0) {
+      if (parsed > current) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Refund amount exceeds current savings (${formatMoney(current, currencyCode: goalCurrency)}).',
+            ),
+          ),
+        );
+        return;
+      }
+      try {
+        await widget.repository.refundSavingsProgress(
+          goalId: goalId,
+          amount: parsed,
+          accountId: selectedAccountId,
+          note: note.text.trim().isEmpty ? null : note.text.trim(),
+        );
+        await _reload();
       } catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -229,6 +434,8 @@ class _SavingsScreenState extends State<SavingsScreen> {
                 final item = items[index];
                 final current = (item['current_amount'] as num?) ?? 0;
                 final target = (item['target_amount'] as num?) ?? 1;
+                final goalCurrency =
+                    (item['currency_code'] ?? _currencyCode).toString().toUpperCase();
                 final progress = (current / (target == 0 ? 1 : target)).clamp(0, 1).toDouble();
                 final goalId = item['id']?.toString() ?? '';
                 final monthlyAvg = monthlyAvgByGoal[goalId] ?? 0;
@@ -246,7 +453,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '${formatMoney(current, currencyCode: _currencyCode)} / ${formatMoney(target, currencyCode: _currencyCode)}',
+                          '${formatMoney(current, currencyCode: goalCurrency)} / ${formatMoney(target, currencyCode: goalCurrency)}',
                         ),
                         const SizedBox(height: 6),
                         ClipRRect(
@@ -265,9 +472,34 @@ class _SavingsScreenState extends State<SavingsScreen> {
                         ),
                       ],
                     ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.add_circle_rounded),
-                      onPressed: () => _addProgress(item),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Add progress',
+                          icon: const Icon(Icons.add_circle_rounded),
+                          onPressed: () => _addProgress(item),
+                        ),
+                        PopupMenuButton<String>(
+                          onSelected: (value) {
+                            if (value == 'edit') {
+                              _editGoal(item);
+                            } else if (value == 'refund') {
+                              _refundProgress(item);
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem<String>(
+                              value: 'edit',
+                              child: Text('Edit goal'),
+                            ),
+                            PopupMenuItem<String>(
+                              value: 'refund',
+                              child: Text('Refund to account'),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
                 );

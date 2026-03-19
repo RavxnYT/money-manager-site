@@ -12,7 +12,7 @@ Future<void> pumpAndSettleLong(WidgetTester tester) async {
 Future<bool> tapTextIfPresent(WidgetTester tester, String text) async {
   final target = find.text(text);
   if (target.evaluate().isEmpty) return false;
-  await _safeTap(tester, target.first);
+  await _safeTap(tester, target);
   await pumpAndSettleLong(tester);
   return true;
 }
@@ -20,7 +20,7 @@ Future<bool> tapTextIfPresent(WidgetTester tester, String text) async {
 Future<bool> tapIconIfPresent(WidgetTester tester, IconData icon) async {
   final target = find.byIcon(icon);
   if (target.evaluate().isEmpty) return false;
-  await _safeTap(tester, target.first);
+  await _safeTap(tester, target);
   await pumpAndSettleLong(tester);
   return true;
 }
@@ -33,7 +33,7 @@ Future<bool> enterTextIfFieldPresent(
 }) async {
   final field = labeledField(label);
   if (field.evaluate().isEmpty) return false;
-  await _safeTap(tester, field.first);
+  await _safeTap(tester, field);
   await tester.pumpAndSettle();
   if (clearFirst) {
     await tester.enterText(field.first, '');
@@ -107,9 +107,10 @@ Future<void> maybeUnlockApp(WidgetTester tester, String? passcode) async {
 Future<void> ensureOnTab(WidgetTester tester, String label) async {
   var tapped = await tapTextIfPresent(tester, label);
   if (!tapped) {
-    final icon = _tabIconForLabel(label);
-    if (icon != null) {
+    final icons = _tabIconsForLabel(label);
+    for (final icon in icons) {
       tapped = await tapIconIfPresent(tester, icon);
+      if (tapped) break;
     }
   }
   if (!tapped) {
@@ -117,22 +118,22 @@ Future<void> ensureOnTab(WidgetTester tester, String label) async {
   }
 }
 
-IconData? _tabIconForLabel(String label) {
+List<IconData> _tabIconsForLabel(String label) {
   switch (label) {
     case 'Dashboard':
-      return Icons.dashboard;
+      return const [Icons.dashboard, Icons.dashboard_outlined];
     case 'Transactions':
-      return Icons.swap_horiz;
+      return const [Icons.swap_horiz, Icons.swap_horiz_outlined];
     case 'Reports':
-      return Icons.insights;
+      return const [Icons.insights, Icons.insights_outlined];
     case 'Savings':
-      return Icons.savings;
+      return const [Icons.savings, Icons.savings_outlined];
     case 'Loans':
-      return Icons.people;
+      return const [Icons.people, Icons.people_outline];
     case 'Settings':
-      return Icons.settings;
+      return const [Icons.settings, Icons.settings_outlined];
     default:
-      return null;
+      return const [];
   }
 }
 
@@ -150,12 +151,14 @@ Future<void> openSettingsTile(WidgetTester tester, String title) async {
 
 Future<void> _safeTap(WidgetTester tester, Finder target) async {
   await _ensureFinderVisible(tester, target);
-  final hitTestable = target.hitTestable();
-  if (hitTestable.evaluate().isNotEmpty) {
-    await tester.tap(hitTestable.first, warnIfMissed: false);
-    return;
+  if (target.evaluate().isEmpty) return;
+  try {
+    await tester.tap(target.first, warnIfMissed: false);
+  } catch (_) {
+    if (target.evaluate().isNotEmpty) {
+      await tester.tap(target.first, warnIfMissed: false);
+    }
   }
-  await tester.tap(target.first, warnIfMissed: false);
 }
 
 Future<void> _ensureFinderVisible(WidgetTester tester, Finder target) async {

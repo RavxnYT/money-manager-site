@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/categories/category_icon_utils.dart';
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/friendly_error.dart';
 import '../../core/notifications/notification_service.dart';
@@ -78,7 +79,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
     String? categoryId;
     final amount = TextEditingController();
     final note = TextEditingController();
-    List<Map<String, dynamic>> categories = await widget.repository.fetchCategories(kind);
+    List<Map<String, dynamic>> categories =
+        await widget.repository.fetchCategories(kind);
     if (categories.isNotEmpty) categoryId = categories.first['id'].toString();
 
     final ok = await showDialog<bool>(
@@ -94,7 +96,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
                   DropdownButtonFormField<String>(
                     value: kind,
                     items: const [
-                      DropdownMenuItem(value: 'expense', child: Text('Expense')),
+                      DropdownMenuItem(
+                          value: 'expense', child: Text('Expense')),
                       DropdownMenuItem(value: 'income', child: Text('Income')),
                     ],
                     onChanged: (v) async {
@@ -104,7 +107,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
                       setInnerState(() {
                         kind = v;
                         categories = c;
-                        categoryId = c.isNotEmpty ? c.first['id'].toString() : null;
+                        categoryId =
+                            c.isNotEmpty ? c.first['id'].toString() : null;
                       });
                     },
                     decoration: const InputDecoration(labelText: 'Type'),
@@ -118,16 +122,32 @@ class _RecurringScreenState extends State<RecurringScreen> {
                               child: Text((e['name'] ?? '').toString()),
                             ))
                         .toList(),
-                    onChanged: (v) => setInnerState(() => accountId = v ?? accountId),
+                    onChanged: (v) =>
+                        setInnerState(() => accountId = v ?? accountId),
                     decoration: const InputDecoration(labelText: 'Account'),
                   ),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
-                    value: categories.any((e) => e['id'].toString() == categoryId) ? categoryId : null,
+                    value:
+                        categories.any((e) => e['id'].toString() == categoryId)
+                            ? categoryId
+                            : null,
                     items: categories
                         .map((e) => DropdownMenuItem<String>(
                               value: e['id'].toString(),
-                              child: Text((e['name'] ?? '').toString()),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    categoryIconFor(
+                                      name: e['name']?.toString(),
+                                      type: kind,
+                                    ),
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text((e['name'] ?? '').toString()),
+                                ],
+                              ),
                             ))
                         .toList(),
                     onChanged: (v) => setInnerState(() => categoryId = v),
@@ -136,7 +156,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
                   const SizedBox(height: 8),
                   TextField(
                     controller: amount,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
                     inputFormatters: [AmountInputFormatter()],
                     decoration: const InputDecoration(labelText: 'Amount'),
                   ),
@@ -146,16 +167,19 @@ class _RecurringScreenState extends State<RecurringScreen> {
                     items: const [
                       DropdownMenuItem(value: 'daily', child: Text('Daily')),
                       DropdownMenuItem(value: 'weekly', child: Text('Weekly')),
-                      DropdownMenuItem(value: 'monthly', child: Text('Monthly')),
+                      DropdownMenuItem(
+                          value: 'monthly', child: Text('Monthly')),
                       DropdownMenuItem(value: 'yearly', child: Text('Yearly')),
                     ],
-                    onChanged: (v) => setInnerState(() => frequency = v ?? frequency),
+                    onChanged: (v) =>
+                        setInnerState(() => frequency = v ?? frequency),
                     decoration: const InputDecoration(labelText: 'Frequency'),
                   ),
                   const SizedBox(height: 8),
                   TextField(
                     controller: note,
-                    decoration: const InputDecoration(labelText: 'Note (optional)'),
+                    decoration:
+                        const InputDecoration(labelText: 'Note (optional)'),
                   ),
                   const SizedBox(height: 6),
                   Align(
@@ -170,15 +194,20 @@ class _RecurringScreenState extends State<RecurringScreen> {
                         );
                         if (d != null) setInnerState(() => nextRun = d);
                       },
-                      child: Text('Next run: ${DateFormat('yyyy-MM-dd').format(nextRun)}'),
+                      child: Text(
+                          'Next run: ${DateFormat('yyyy-MM-dd').format(nextRun)}'),
                     ),
                   ),
                 ],
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
+              TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Save')),
             ],
           );
         },
@@ -228,60 +257,64 @@ class _RecurringScreenState extends State<RecurringScreen> {
           child: FutureBuilder<List<Map<String, dynamic>>>(
             future: _future,
             builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return ListView(
-                children: [
-                  const SizedBox(height: 120),
-                  Center(child: Text(friendlyErrorMessage(snapshot.error))),
-                ],
-              );
-            }
-            final items = snapshot.data ?? [];
-            if (items.isEmpty) {
-              return ListView(
-                children: const [
-                  SizedBox(height: 120),
-                  Center(child: Text('No recurring automations yet')),
-                ],
-              );
-            }
-
-            return ListView.builder(
-              padding: const EdgeInsets.only(bottom: 108),
-              itemCount: items.length,
-              itemBuilder: (context, index) {
-                final item = items[index];
-                final amount = ((item['amount'] as num?) ?? 0).toDouble();
-                final kind = (item['kind'] ?? '').toString();
-                final freq = (item['frequency'] ?? '').toString();
-                final nextRun = (item['next_run_date'] ?? '').toString();
-                final account = _relationName(item['accounts']);
-                final category = _relationName(item['categories']);
-                final isActive = (item['is_active'] as bool?) ?? false;
-
-                return GlassPanel(
-                  margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
-                  child: ListTile(
-                    title: Text('${currency.format(amount)} • ${kind.toUpperCase()}'),
-                    subtitle: Text('$account • $category • $freq • Next: $nextRun'),
-                    trailing: Switch(
-                      value: isActive,
-                      onChanged: (v) async {
-                        await widget.repository.toggleRecurringTransaction(
-                          recurringId: item['id'].toString(),
-                          isActive: v,
-                        );
-                        await NotificationService.instance.syncAllReminders(widget.repository);
-                        _reload();
-                      },
-                    ),
-                  ),
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.hasError) {
+                return ListView(
+                  children: [
+                    const SizedBox(height: 120),
+                    Center(child: Text(friendlyErrorMessage(snapshot.error))),
+                  ],
                 );
-              },
-            );
+              }
+              final items = snapshot.data ?? [];
+              if (items.isEmpty) {
+                return ListView(
+                  children: const [
+                    SizedBox(height: 120),
+                    Center(child: Text('No recurring automations yet')),
+                  ],
+                );
+              }
+
+              return ListView.builder(
+                padding: const EdgeInsets.only(bottom: 108),
+                itemCount: items.length,
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  final amount = ((item['amount'] as num?) ?? 0).toDouble();
+                  final kind = (item['kind'] ?? '').toString();
+                  final freq = (item['frequency'] ?? '').toString();
+                  final nextRun = (item['next_run_date'] ?? '').toString();
+                  final account = _relationName(item['accounts']);
+                  final category = _relationName(item['categories']);
+                  final isActive = (item['is_active'] as bool?) ?? false;
+
+                  return GlassPanel(
+                    margin:
+                        const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+                    child: ListTile(
+                      title: Text(
+                          '${currency.format(amount)} • ${kind.toUpperCase()}'),
+                      subtitle:
+                          Text('$account • $category • $freq • Next: $nextRun'),
+                      trailing: Switch(
+                        value: isActive,
+                        onChanged: (v) async {
+                          await widget.repository.toggleRecurringTransaction(
+                            recurringId: item['id'].toString(),
+                            isActive: v,
+                          );
+                          await NotificationService.instance
+                              .syncAllReminders(widget.repository);
+                          _reload();
+                        },
+                      ),
+                    ),
+                  );
+                },
+              );
             },
           ),
         ),

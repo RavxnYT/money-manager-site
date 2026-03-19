@@ -25,6 +25,7 @@ class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
   int _dataRevision = 0;
   bool _isOffline = false;
+  late final PageController _pageController;
   StreamSubscription<bool>? _networkSubscription;
   StreamSubscription<int>? _dataChangesSubscription;
   static const _titles = [
@@ -39,6 +40,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _pageController = PageController(initialPage: _currentIndex);
     _initNetworkState();
     _dataChangesSubscription = widget.repository.dataChanges.listen((_) {
       if (!mounted) return;
@@ -48,6 +50,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       widget.repository.syncPendingOperations();
+      widget.repository.ensureDefaultCategories();
       _maybeAskDefaultCurrency();
     });
   }
@@ -139,9 +142,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _pageController.dispose();
     _networkSubscription?.cancel();
     _dataChangesSubscription?.cancel();
     super.dispose();
+  }
+
+  Future<void> _onTabTapped(int index) async {
+    if (_currentIndex == index) return;
+    setState(() => _currentIndex = index);
+    if (_pageController.hasClients) {
+      await _pageController.animateToPage(
+        index,
+        duration: AppDesignTokens.quick,
+        curve: Curves.easeOutCubic,
+      );
+    }
   }
 
   @override
@@ -238,23 +254,16 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
           ),
           Expanded(
-            child: AnimatedSwitcher(
-              duration: AppDesignTokens.medium,
-              switchInCurve: Curves.easeOutCubic,
-              switchOutCurve: Curves.easeInCubic,
-              transitionBuilder: (child, animation) {
-                final slide = Tween<Offset>(
-                  begin: const Offset(0.03, 0),
-                  end: Offset.zero,
-                ).animate(animation);
-                return FadeTransition(
-                  opacity: animation,
-                  child: SlideTransition(position: slide, child: child),
-                );
+            child: PageView.builder(
+              controller: _pageController,
+              itemCount: pages.length,
+              onPageChanged: (value) {
+                if (!mounted) return;
+                setState(() => _currentIndex = value);
               },
-              child: KeyedSubtree(
-                key: ValueKey('tab-$_currentIndex-$_dataRevision'),
-                child: pages[_currentIndex],
+              itemBuilder: (context, index) => KeyedSubtree(
+                key: ValueKey('tab-$index-$_dataRevision'),
+                child: pages[index],
               ),
             ),
           ),
@@ -322,7 +331,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 label: 'Settings',
               ),
             ],
-            onTap: (value) => setState(() => _currentIndex = value),
+            onTap: _onTabTapped,
           ),
         ),
       ),

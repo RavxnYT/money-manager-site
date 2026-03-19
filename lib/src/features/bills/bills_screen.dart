@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/categories/category_icon_utils.dart';
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/friendly_error.dart';
 import '../../core/notifications/notification_service.dart';
@@ -79,7 +80,8 @@ class _BillsScreenState extends State<BillsScreen> {
                 const SizedBox(height: 8),
                 TextField(
                   controller: amount,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
                   inputFormatters: [AmountInputFormatter()],
                   decoration: const InputDecoration(labelText: 'Amount'),
                 ),
@@ -92,16 +94,31 @@ class _BillsScreenState extends State<BillsScreen> {
                             child: Text((e['name'] ?? '').toString()),
                           ))
                       .toList(),
-                  onChanged: (v) => setInnerState(() => accountId = v ?? accountId),
+                  onChanged: (v) =>
+                      setInnerState(() => accountId = v ?? accountId),
                   decoration: const InputDecoration(labelText: 'Account'),
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
-                  value: categories.any((e) => e['id'].toString() == categoryId) ? categoryId : null,
+                  value: categories.any((e) => e['id'].toString() == categoryId)
+                      ? categoryId
+                      : null,
                   items: categories
                       .map((e) => DropdownMenuItem<String>(
                             value: e['id'].toString(),
-                            child: Text((e['name'] ?? '').toString()),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  categoryIconFor(
+                                    name: e['name']?.toString(),
+                                    type: 'expense',
+                                  ),
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 8),
+                                Text((e['name'] ?? '').toString()),
+                              ],
+                            ),
                           ))
                       .toList(),
                   onChanged: (v) => setInnerState(() => categoryId = v),
@@ -116,7 +133,8 @@ class _BillsScreenState extends State<BillsScreen> {
                     DropdownMenuItem(value: 'monthly', child: Text('Monthly')),
                     DropdownMenuItem(value: 'yearly', child: Text('Yearly')),
                   ],
-                  onChanged: (v) => setInnerState(() => frequency = v ?? frequency),
+                  onChanged: (v) =>
+                      setInnerState(() => frequency = v ?? frequency),
                   decoration: const InputDecoration(labelText: 'Frequency'),
                 ),
                 const SizedBox(height: 6),
@@ -132,22 +150,30 @@ class _BillsScreenState extends State<BillsScreen> {
                       );
                       if (d != null) setInnerState(() => dueDate = d);
                     },
-                    child: Text('Due date: ${DateFormat('yyyy-MM-dd').format(dueDate)}'),
+                    child: Text(
+                        'Due date: ${DateFormat('yyyy-MM-dd').format(dueDate)}'),
                   ),
                 ),
               ],
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Save')),
           ],
         ),
       ),
     );
 
     final parsedAmount = parseFormattedAmount(amount.text.trim());
-    if (ok == true && title.text.trim().isNotEmpty && parsedAmount != null && parsedAmount > 0) {
+    if (ok == true &&
+        title.text.trim().isNotEmpty &&
+        parsedAmount != null &&
+        parsedAmount > 0) {
       try {
         await widget.repository.createBillReminder(
           title: title.text.trim(),
@@ -179,74 +205,81 @@ class _BillsScreenState extends State<BillsScreen> {
           child: FutureBuilder<List<Map<String, dynamic>>>(
             future: _future,
             builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return ListView(
-                children: [
-                  const SizedBox(height: 120),
-                  Center(child: Text(friendlyErrorMessage(snapshot.error))),
-                ],
-              );
-            }
-            final rows = snapshot.data ?? [];
-            if (rows.isEmpty) {
-              return ListView(
-                children: const [
-                  SizedBox(height: 120),
-                  Center(child: Text('No bill reminders yet')),
-                ],
-              );
-            }
-            return ListView.builder(
-              padding: const EdgeInsets.only(bottom: 108),
-              itemCount: rows.length,
-              itemBuilder: (context, index) {
-                final row = rows[index];
-                final amount = ((row['amount'] as num?) ?? 0).toDouble();
-                final dueDate = DateTime.tryParse((row['due_date'] ?? '').toString());
-                final frequency = (row['frequency'] ?? '').toString();
-                final title = (row['title'] ?? '').toString();
-                final isActive = (row['is_active'] as bool?) ?? false;
-                final daysLeft = dueDate == null ? 9999 : dueDate.difference(DateTime.now()).inDays;
-                final dueColor = daysLeft < 0
-                    ? const Color(0xFFFF6B86)
-                    : daysLeft <= 3
-                        ? const Color(0xFFFFC857)
-                        : const Color(0xFF8EA2FF);
-
-                return GlassPanel(
-                  margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
-                  child: ListTile(
-                    title: Text('$title • ${currency.format(amount)}'),
-                    subtitle: Text(
-                      '${_relationName(row['accounts'])} • ${_relationName(row['categories'])} • $frequency • Due: ${row['due_date']}',
-                    ),
-                    trailing: isActive
-                        ? FilledButton.tonal(
-                            onPressed: () async {
-                              try {
-                                await widget.repository.markBillPaid(billId: row['id'].toString());
-                                await NotificationService.instance.syncAllReminders(widget.repository);
-                                _reload();
-                              } catch (e) {
-                                if (!mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text(friendlyErrorMessage(e))),
-                                );
-                              }
-                            },
-                            child: Text(
-                              daysLeft < 0 ? 'Overdue' : 'Paid',
-                              style: TextStyle(color: dueColor),
-                            ),
-                          )
-                        : const Text('Inactive'),
-                  ),
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.hasError) {
+                return ListView(
+                  children: [
+                    const SizedBox(height: 120),
+                    Center(child: Text(friendlyErrorMessage(snapshot.error))),
+                  ],
                 );
-              },
-            );
+              }
+              final rows = snapshot.data ?? [];
+              if (rows.isEmpty) {
+                return ListView(
+                  children: const [
+                    SizedBox(height: 120),
+                    Center(child: Text('No bill reminders yet')),
+                  ],
+                );
+              }
+              return ListView.builder(
+                padding: const EdgeInsets.only(bottom: 108),
+                itemCount: rows.length,
+                itemBuilder: (context, index) {
+                  final row = rows[index];
+                  final amount = ((row['amount'] as num?) ?? 0).toDouble();
+                  final dueDate =
+                      DateTime.tryParse((row['due_date'] ?? '').toString());
+                  final frequency = (row['frequency'] ?? '').toString();
+                  final title = (row['title'] ?? '').toString();
+                  final isActive = (row['is_active'] as bool?) ?? false;
+                  final daysLeft = dueDate == null
+                      ? 9999
+                      : dueDate.difference(DateTime.now()).inDays;
+                  final dueColor = daysLeft < 0
+                      ? const Color(0xFFFF6B86)
+                      : daysLeft <= 3
+                          ? const Color(0xFFFFC857)
+                          : const Color(0xFF8EA2FF);
+
+                  return GlassPanel(
+                    margin:
+                        const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+                    child: ListTile(
+                      title: Text('$title • ${currency.format(amount)}'),
+                      subtitle: Text(
+                        '${_relationName(row['accounts'])} • ${_relationName(row['categories'])} • $frequency • Due: ${row['due_date']}',
+                      ),
+                      trailing: isActive
+                          ? FilledButton.tonal(
+                              onPressed: () async {
+                                try {
+                                  await widget.repository.markBillPaid(
+                                      billId: row['id'].toString());
+                                  await NotificationService.instance
+                                      .syncAllReminders(widget.repository);
+                                  _reload();
+                                } catch (e) {
+                                  if (!mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content: Text(friendlyErrorMessage(e))),
+                                  );
+                                }
+                              },
+                              child: Text(
+                                daysLeft < 0 ? 'Overdue' : 'Paid',
+                                style: TextStyle(color: dueColor),
+                              ),
+                            )
+                          : const Text('Inactive'),
+                    ),
+                  );
+                },
+              );
             },
           ),
         ),

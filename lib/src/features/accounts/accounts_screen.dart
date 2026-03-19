@@ -44,7 +44,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
     final accounts = await widget.repository.fetchAccounts();
     for (final account in accounts) {
       final balance = ((account['current_balance'] as num?) ?? 0).toDouble();
-      final sourceCurrency = (account['currency_code'] ?? _defaultCurrency).toString();
+      final sourceCurrency =
+          (account['currency_code'] ?? _defaultCurrency).toString();
       final displayBalance = await widget.repository.convertAmountForDisplay(
         amount: balance,
         sourceCurrencyCode: sourceCurrency,
@@ -72,7 +73,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextField(controller: name, decoration: const InputDecoration(labelText: 'Name')),
+                TextField(
+                    controller: name,
+                    decoration: const InputDecoration(labelText: 'Name')),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
                   value: type,
@@ -83,29 +86,38 @@ class _AccountsScreenState extends State<AccountsScreen> {
                     DropdownMenuItem(value: 'ewallet', child: Text('E-wallet')),
                     DropdownMenuItem(value: 'other', child: Text('Other')),
                   ],
-                  onChanged: (value) => setInnerState(() => type = value ?? 'cash'),
+                  onChanged: (value) =>
+                      setInnerState(() => type = value ?? 'cash'),
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
                   value: currencyCode,
                   items: supportedCurrencyCodes
-                      .map((code) => DropdownMenuItem<String>(value: code, child: Text(code)))
+                      .map((code) => DropdownMenuItem<String>(
+                          value: code, child: Text(code)))
                       .toList(),
-                  onChanged: (value) => setInnerState(() => currencyCode = value ?? currencyCode),
+                  onChanged: (value) =>
+                      setInnerState(() => currencyCode = value ?? currencyCode),
                   decoration: const InputDecoration(labelText: 'Currency'),
                 ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: opening,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
                   inputFormatters: [AmountInputFormatter()],
-                  decoration: const InputDecoration(labelText: 'Opening Balance'),
+                  decoration:
+                      const InputDecoration(labelText: 'Opening Balance'),
                 ),
               ],
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
+              TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Save')),
             ],
           );
         },
@@ -125,9 +137,15 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   Future<void> _editAccount(Map<String, dynamic> account) async {
-    final name = TextEditingController(text: (account['name'] ?? '').toString());
+    final name =
+        TextEditingController(text: (account['name'] ?? '').toString());
+    final currentBalance =
+        ((account['current_balance'] as num?) ?? 0).toDouble();
+    final balance =
+        TextEditingController(text: currentBalance.toStringAsFixed(2));
     String type = (account['type'] ?? 'cash').toString();
-    String currencyCode = (account['currency_code'] ?? _defaultCurrency).toString();
+    String currencyCode =
+        (account['currency_code'] ?? _defaultCurrency).toString();
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
@@ -157,27 +175,43 @@ class _AccountsScreenState extends State<AccountsScreen> {
               DropdownButtonFormField<String>(
                 value: currencyCode,
                 items: supportedCurrencyCodes
-                    .map((code) => DropdownMenuItem<String>(value: code, child: Text(code)))
+                    .map((code) => DropdownMenuItem<String>(
+                        value: code, child: Text(code)))
                     .toList(),
-                onChanged: (value) => setInnerState(() => currencyCode = value ?? currencyCode),
+                onChanged: (value) =>
+                    setInnerState(() => currencyCode = value ?? currencyCode),
                 decoration: const InputDecoration(labelText: 'Currency'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: balance,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [AmountInputFormatter()],
+                decoration: const InputDecoration(labelText: 'Current Balance'),
               ),
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Save')),
           ],
         ),
       ),
     );
 
-    if (ok == true && name.text.trim().isNotEmpty) {
+    final parsedBalance = parseFormattedAmount(balance.text);
+    if (ok == true && name.text.trim().isNotEmpty && parsedBalance != null) {
       await widget.repository.updateAccount(
         accountId: account['id'].toString(),
         name: name.text.trim(),
         type: type,
         currencyCode: currencyCode,
+        currentBalance: parsedBalance,
       );
       if (!mounted) return;
       _reload();
@@ -191,20 +225,26 @@ class _AccountsScreenState extends State<AccountsScreen> {
         title: const Text('Delete Account'),
         content: Text('Delete "${account['name']}"? This cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete')),
         ],
       ),
     );
     if (ok == true) {
-      await widget.repository.deleteAccount(accountId: account['id'].toString());
+      await widget.repository
+          .deleteAccount(accountId: account['id'].toString());
       if (!mounted) return;
       _reload();
     }
   }
 
   Future<void> _exchangeCurrency(Map<String, dynamic> account) async {
-    final fromCurrency = (account['currency_code'] ?? _defaultCurrency).toString();
+    final fromCurrency =
+        (account['currency_code'] ?? _defaultCurrency).toString();
     String target = supportedCurrencyCodes.firstWhere(
       (c) => c != fromCurrency,
       orElse: () => fromCurrency,
@@ -223,16 +263,22 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 value: target,
                 items: supportedCurrencyCodes
                     .where((c) => c != fromCurrency)
-                    .map((code) => DropdownMenuItem<String>(value: code, child: Text(code)))
+                    .map((code) => DropdownMenuItem<String>(
+                        value: code, child: Text(code)))
                     .toList(),
-                onChanged: (value) => setInnerState(() => target = value ?? target),
+                onChanged: (value) =>
+                    setInnerState(() => target = value ?? target),
                 decoration: const InputDecoration(labelText: 'To currency'),
               ),
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Exchange')),
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Exchange')),
           ],
         ),
       ),
@@ -251,7 +297,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
         );
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Converted $fromCurrency to $target at rate ${rate.toStringAsFixed(4)}')),
+          SnackBar(
+              content: Text(
+                  'Converted $fromCurrency to $target at rate ${rate.toStringAsFixed(4)}')),
         );
         _reload();
       } catch (e) {
@@ -275,51 +323,68 @@ class _AccountsScreenState extends State<AccountsScreen> {
           child: FutureBuilder<List<Map<String, dynamic>>>(
             future: _future,
             builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return ListView(children: [Center(child: Text(friendlyErrorMessage(snapshot.error)))]);
-            }
-            final items = snapshot.data ?? [];
-            if (items.isEmpty) {
-              return ListView(children: const [SizedBox(height: 120), Center(child: Text('No accounts yet'))]);
-            }
-            return ListView.builder(
-              padding: const EdgeInsets.only(bottom: 112),
-              itemCount: items.length,
-              itemBuilder: (_, index) {
-                final item = items[index];
-                final balance = ((item['display_balance'] as num?) ?? (item['current_balance'] as num?) ?? 0).toDouble();
-                final type = (item['type'] as String? ?? '').toUpperCase();
-                final currencyCode = (item['display_currency'] ?? item['currency_code'] ?? _defaultCurrency).toString();
-                return GlassPanel(
-                  margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    leading: Container(
-                      height: 42,
-                      width: 42,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(14),
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF5D72E9), Color(0xFF4DA1F6)],
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.hasError) {
+                return ListView(children: [
+                  Center(child: Text(friendlyErrorMessage(snapshot.error)))
+                ]);
+              }
+              final items = snapshot.data ?? [];
+              if (items.isEmpty) {
+                return ListView(children: const [
+                  SizedBox(height: 120),
+                  Center(child: Text('No accounts yet'))
+                ]);
+              }
+              return ListView.builder(
+                padding: const EdgeInsets.only(bottom: 112),
+                itemCount: items.length,
+                itemBuilder: (_, index) {
+                  final item = items[index];
+                  final balance = ((item['display_balance'] as num?) ??
+                          (item['current_balance'] as num?) ??
+                          0)
+                      .toDouble();
+                  final type = (item['type'] as String? ?? '').toUpperCase();
+                  final currencyCode = (item['display_currency'] ??
+                          item['currency_code'] ??
+                          _defaultCurrency)
+                      .toString();
+                  return GlassPanel(
+                    margin:
+                        const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 6),
+                      leading: Container(
+                        height: 42,
+                        width: 42,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF5D72E9), Color(0xFF4DA1F6)],
+                          ),
                         ),
+                        child: const Icon(Icons.account_balance_wallet_rounded,
+                            color: Colors.white),
                       ),
-                      child: const Icon(Icons.account_balance_wallet_rounded, color: Colors.white),
+                      title: Text(item['name'] as String? ?? '',
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      subtitle: Text('$type • $currencyCode',
+                          style: const TextStyle(color: Colors.white70)),
+                      trailing: Text(
+                        formatMoney(balance, currencyCode: currencyCode),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 16),
+                      ),
+                      onTap: () => _editAccount(item),
+                      onLongPress: () => _showAccountActions(item),
                     ),
-                    title: Text(item['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text('$type • $currencyCode', style: const TextStyle(color: Colors.white70)),
-                    trailing: Text(
-                      formatMoney(balance, currencyCode: currencyCode),
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-                    ),
-                    onTap: () => _editAccount(item),
-                    onLongPress: () => _showAccountActions(item),
-                  ),
-                );
-              },
-            );
+                  );
+                },
+              );
             },
           ),
         ),

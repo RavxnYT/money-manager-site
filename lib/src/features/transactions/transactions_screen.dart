@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/categories/category_icon_utils.dart';
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
@@ -104,217 +105,225 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           child: FutureBuilder<List<Map<String, dynamic>>>(
             future: _future,
             builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return ListView(
-                children: [
-                  const SizedBox(height: 120),
-                  Center(child: Text(friendlyErrorMessage(snapshot.error))),
-                ],
-              );
-            }
-            final rows = snapshot.data ?? [];
-            final search = _searchController.text.trim().toLowerCase();
-            final filteredRows = rows.where((row) {
-              final kind = (row['kind'] ?? '').toString();
-              if (_kindFilter != 'all' && kind != _kindFilter) return false;
-              if (search.isEmpty) return true;
-              final account = _relationName(row['account']).toLowerCase();
-              final category = _relationName(row['categories']).toLowerCase();
-              final note = (row['note'] ?? '').toString().toLowerCase();
-              return account.contains(search) ||
-                  category.contains(search) ||
-                  note.contains(search);
-            }).toList()
-              ..sort((a, b) {
-                final amountA = ((a['amount'] as num?) ?? 0).toDouble();
-                final amountB = ((b['amount'] as num?) ?? 0).toDouble();
-                final dateA = _transactionDateValue(a);
-                final dateB = _transactionDateValue(b);
-                switch (_sortFilter) {
-                  case 'oldest':
-                    return dateA.compareTo(dateB);
-                  case 'amount_desc':
-                    return amountB.compareTo(amountA);
-                  case 'amount_asc':
-                    return amountA.compareTo(amountB);
-                  case 'newest':
-                  default:
-                    return dateB.compareTo(dateA);
-                }
-              });
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.hasError) {
+                return ListView(
+                  children: [
+                    const SizedBox(height: 120),
+                    Center(child: Text(friendlyErrorMessage(snapshot.error))),
+                  ],
+                );
+              }
+              final rows = snapshot.data ?? [];
+              final search = _searchController.text.trim().toLowerCase();
+              final filteredRows = rows.where((row) {
+                final kind = (row['kind'] ?? '').toString();
+                if (_kindFilter != 'all' && kind != _kindFilter) return false;
+                if (search.isEmpty) return true;
+                final account = _relationName(row['account']).toLowerCase();
+                final category = _relationName(row['categories']).toLowerCase();
+                final note = (row['note'] ?? '').toString().toLowerCase();
+                return account.contains(search) ||
+                    category.contains(search) ||
+                    note.contains(search);
+              }).toList()
+                ..sort((a, b) {
+                  final amountA = ((a['amount'] as num?) ?? 0).toDouble();
+                  final amountB = ((b['amount'] as num?) ?? 0).toDouble();
+                  final dateA = _transactionDateValue(a);
+                  final dateB = _transactionDateValue(b);
+                  switch (_sortFilter) {
+                    case 'oldest':
+                      return dateA.compareTo(dateB);
+                    case 'amount_desc':
+                      return amountB.compareTo(amountA);
+                    case 'amount_asc':
+                      return amountA.compareTo(amountB);
+                    case 'newest':
+                    default:
+                      return dateB.compareTo(dateA);
+                  }
+                });
 
-            if (rows.isEmpty) {
-              return ListView(
-                children: const [
-                  SizedBox(height: 120),
-                  Center(child: Text('No transactions yet')),
-                ],
-              );
-            }
-            return Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(6, 12, 6, 8),
-                  child: TextField(
-                    controller: _searchController,
-                    onChanged: (_) => setState(() {}),
-                    decoration: const InputDecoration(
-                      labelText: 'Search by account, category, or note',
-                      prefixIcon: Icon(Icons.search),
+              if (rows.isEmpty) {
+                return ListView(
+                  children: const [
+                    SizedBox(height: 120),
+                    Center(child: Text('No transactions yet')),
+                  ],
+                );
+              }
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 12, 6, 8),
+                    child: TextField(
+                      controller: _searchController,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Search by account, category, or note',
+                        prefixIcon: Icon(Icons.search),
+                      ),
                     ),
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'all', label: Text('All')),
-                      ButtonSegment(value: 'expense', label: Text('Expense')),
-                      ButtonSegment(value: 'income', label: Text('Income')),
-                      ButtonSegment(value: 'transfer', label: Text('Transfer')),
-                    ],
-                    selected: {_kindFilter},
-                    onSelectionChanged: (set) =>
-                        setState(() => _kindFilter = set.first),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
-                  child: DropdownButtonFormField<String>(
-                    value: _sortFilter,
-                    items: const [
-                      DropdownMenuItem(value: 'newest', child: Text('Newest')),
-                      DropdownMenuItem(value: 'oldest', child: Text('Oldest')),
-                      DropdownMenuItem(
-                          value: 'amount_desc', child: Text('Higher to lower')),
-                      DropdownMenuItem(
-                          value: 'amount_asc', child: Text('Lower to higher')),
-                    ],
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setState(() => _sortFilter = value);
-                    },
-                    decoration: const InputDecoration(
-                      labelText: 'Sort by',
-                      isDense: true,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: SegmentedButton<String>(
+                      segments: const [
+                        ButtonSegment(value: 'all', label: Text('All')),
+                        ButtonSegment(value: 'expense', label: Text('Expense')),
+                        ButtonSegment(value: 'income', label: Text('Income')),
+                        ButtonSegment(
+                            value: 'transfer', label: Text('Transfer')),
+                      ],
+                      selected: {_kindFilter},
+                      onSelectionChanged: (set) =>
+                          setState(() => _kindFilter = set.first),
                     ),
                   ),
-                ),
-                const SizedBox(height: 6),
-                Expanded(
-                  child: filteredRows.isEmpty
-                      ? ListView(
-                          children: const [
-                            SizedBox(height: 120),
-                            Center(
-                                child:
-                                    Text('No transactions match your filters')),
-                          ],
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.only(bottom: 110),
-                          itemCount: filteredRows.length,
-                          itemBuilder: (context, index) {
-                            final row = filteredRows[index];
-                            final amount = ((row['display_amount'] as num?) ??
-                                    (row['amount'] as num?) ??
-                                    0)
-                                .toDouble();
-                            final kind = (row['kind'] ?? '') as String;
-                            final account = _relationName(row['account']);
-                            final accountCurrency = (row['display_currency'] ??
-                                    _relationCurrency(row['account']))
-                                .toString();
-                            final transferAccount =
-                                _relationName(row['transfer_account']);
-                            final category = _relationName(row['categories']);
-                            final date =
-                                row['transaction_date']?.toString() ?? '';
-                            final subtitle = kind == 'transfer'
-                                ? '$account -> $transferAccount • $date'
-                                : '$account • $category • $date';
-                            final isExpense = kind == 'expense';
-                            final isIncome = kind == 'income';
-                            final amountColor = isIncome
-                                ? const Color(0xFF3BD188)
-                                : isExpense
-                                    ? const Color(0xFFFF6B86)
-                                    : const Color(0xFF90A4FF);
-                            return Dismissible(
-                              key: ValueKey(row['id']),
-                              direction: DismissDirection.endToStart,
-                              background: Container(
-                                color: Colors.red,
-                                alignment: Alignment.centerRight,
-                                padding: const EdgeInsets.only(right: 20),
-                                child: const Icon(Icons.delete,
-                                    color: Colors.white),
-                              ),
-                              onDismissed: (_) async {
-                                await widget.repository
-                                    .deleteTransaction(row['id'] as String);
-                                _reload();
-                              },
-                              child: Card(
-                                margin: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 7),
-                                child: ListTile(
-                                  contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 14, vertical: 6),
-                                  leading: Container(
-                                    height: 42,
-                                    width: 42,
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(13),
-                                      color: amountColor.withOpacity(0.18),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
+                    child: DropdownButtonFormField<String>(
+                      value: _sortFilter,
+                      items: const [
+                        DropdownMenuItem(
+                            value: 'newest', child: Text('Newest')),
+                        DropdownMenuItem(
+                            value: 'oldest', child: Text('Oldest')),
+                        DropdownMenuItem(
+                            value: 'amount_desc',
+                            child: Text('Higher to lower')),
+                        DropdownMenuItem(
+                            value: 'amount_asc',
+                            child: Text('Lower to higher')),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() => _sortFilter = value);
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Sort by',
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Expanded(
+                    child: filteredRows.isEmpty
+                        ? ListView(
+                            children: const [
+                              SizedBox(height: 120),
+                              Center(
+                                  child: Text(
+                                      'No transactions match your filters')),
+                            ],
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.only(bottom: 110),
+                            itemCount: filteredRows.length,
+                            itemBuilder: (context, index) {
+                              final row = filteredRows[index];
+                              final amount = ((row['display_amount'] as num?) ??
+                                      (row['amount'] as num?) ??
+                                      0)
+                                  .toDouble();
+                              final kind = (row['kind'] ?? '') as String;
+                              final account = _relationName(row['account']);
+                              final accountCurrency =
+                                  (row['display_currency'] ??
+                                          _relationCurrency(row['account']))
+                                      .toString();
+                              final transferAccount =
+                                  _relationName(row['transfer_account']);
+                              final category = _relationName(row['categories']);
+                              final date =
+                                  row['transaction_date']?.toString() ?? '';
+                              final subtitle = kind == 'transfer'
+                                  ? '$account -> $transferAccount • $date'
+                                  : '$account • $category • $date';
+                              final isExpense = kind == 'expense';
+                              final isIncome = kind == 'income';
+                              final amountColor = isIncome
+                                  ? const Color(0xFF3BD188)
+                                  : isExpense
+                                      ? const Color(0xFFFF6B86)
+                                      : const Color(0xFF90A4FF);
+                              final leadingIcon = kind == 'transfer'
+                                  ? Icons.swap_horiz_rounded
+                                  : categoryIconFor(
+                                      name: category,
+                                      type: kind,
+                                    );
+                              return Dismissible(
+                                key: ValueKey(row['id']),
+                                direction: DismissDirection.endToStart,
+                                background: Container(
+                                  color: Colors.red,
+                                  alignment: Alignment.centerRight,
+                                  padding: const EdgeInsets.only(right: 20),
+                                  child: const Icon(Icons.delete,
+                                      color: Colors.white),
+                                ),
+                                onDismissed: (_) async {
+                                  await widget.repository
+                                      .deleteTransaction(row['id'] as String);
+                                  _reload();
+                                },
+                                child: Card(
+                                  margin: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 7),
+                                  child: ListTile(
+                                    contentPadding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 6),
+                                    leading: Container(
+                                      height: 42,
+                                      width: 42,
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(13),
+                                        color: amountColor.withOpacity(0.18),
+                                      ),
+                                      child: Icon(
+                                        leadingIcon,
+                                        color: amountColor,
+                                      ),
                                     ),
-                                    child: Icon(
-                                      isIncome
-                                          ? Icons.south_west_rounded
-                                          : isExpense
-                                              ? Icons.north_east_rounded
-                                              : Icons.swap_horiz_rounded,
-                                      color: amountColor,
+                                    title: Text(
+                                      formatMoney(amount,
+                                          currencyCode: accountCurrency),
+                                      style: TextStyle(
+                                        color: amountColor,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 17,
+                                      ),
                                     ),
-                                  ),
-                                  title: Text(
-                                    formatMoney(amount,
-                                        currencyCode: accountCurrency),
-                                    style: TextStyle(
-                                      color: amountColor,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 17,
+                                    subtitle: Padding(
+                                      padding: const EdgeInsets.only(top: 3),
+                                      child: Text(
+                                        subtitle,
+                                        style: const TextStyle(
+                                            color: Colors.white70),
+                                      ),
                                     ),
-                                  ),
-                                  subtitle: Padding(
-                                    padding: const EdgeInsets.only(top: 3),
-                                    child: Text(
-                                      subtitle,
-                                      style: const TextStyle(
-                                          color: Colors.white70),
+                                    trailing: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 10, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(30),
+                                        color: Colors.white.withOpacity(0.08),
+                                      ),
+                                      child: Text(kind.toUpperCase(),
+                                          style: const TextStyle(fontSize: 11)),
                                     ),
-                                  ),
-                                  trailing: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 10, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(30),
-                                      color: Colors.white.withOpacity(0.08),
-                                    ),
-                                    child: Text(kind.toUpperCase(),
-                                        style: const TextStyle(fontSize: 11)),
                                   ),
                                 ),
-                              ),
-                            );
-                          },
-                        ),
-                ),
-              ],
-            );
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              );
             },
           ),
         ),
@@ -608,7 +617,19 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                     items: uniqueCategories
                         .map((e) => DropdownMenuItem<String>(
                               value: e['id'].toString(),
-                              child: Text((e['name'] ?? '').toString()),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    categoryIconFor(
+                                      name: e['name']?.toString(),
+                                      type: _kind,
+                                    ),
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text((e['name'] ?? '').toString()),
+                                ],
+                              ),
                             ))
                         .toList(),
                     onChanged: (value) => setState(() => _categoryId = value),

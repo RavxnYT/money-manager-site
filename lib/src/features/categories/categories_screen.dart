@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/categories/category_icon_utils.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/glass_panel.dart';
@@ -35,25 +36,32 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text('New ${_type[0].toUpperCase()}${_type.substring(1)} Category'),
+        title:
+            Text('New ${_type[0].toUpperCase()}${_type.substring(1)} Category'),
         content: TextField(
           controller: controller,
           decoration: const InputDecoration(labelText: 'Name'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Save')),
         ],
       ),
     );
     if (ok == true && controller.text.trim().isNotEmpty) {
-      await widget.repository.createCategory(name: controller.text.trim(), type: _type);
+      await widget.repository
+          .createCategory(name: controller.text.trim(), type: _type);
       _reload();
     }
   }
 
   Future<void> _editCategory(Map<String, dynamic> category) async {
-    final controller = TextEditingController(text: (category['name'] ?? '').toString());
+    final controller =
+        TextEditingController(text: (category['name'] ?? '').toString());
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -63,8 +71,12 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           decoration: const InputDecoration(labelText: 'Name'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Save')),
         ],
       ),
     );
@@ -84,8 +96,12 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         title: const Text('Delete Category'),
         content: Text('Delete "${category['name']}"?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete')),
         ],
       ),
     );
@@ -135,79 +151,99 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
       body: AppPageScaffold(
         child: Column(
           children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'expense', label: Text('Expense')),
-                ButtonSegment(value: 'income', label: Text('Income')),
-              ],
-              selected: {_type},
-              onSelectionChanged: (selected) {
-                _type = selected.first;
-                _reload();
-              },
-            ),
-          ),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: _reload,
-              child: FutureBuilder<List<Map<String, dynamic>>>(
-                future: _future,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (snapshot.hasError) {
-                    return ListView(children: [Center(child: Text(friendlyErrorMessage(snapshot.error)))]);
-                  }
-                  final items = snapshot.data ?? [];
-                  if (items.isEmpty) {
-                    return ListView(children: const [SizedBox(height: 120), Center(child: Text('No categories'))]);
-                  }
-                  return ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 108),
-                    itemCount: items.length,
-                    itemBuilder: (context, index) {
-                      final item = items[index];
-                      return GlassPanel(
-                        margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                          leading: Container(
-                            height: 36,
-                            width: 36,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(11),
-                              color: (_type == 'expense'
-                                      ? const Color(0xFFFF6B86)
-                                      : const Color(0xFF3BD188))
-                                  .withOpacity(0.2),
-                            ),
-                            child: Icon(
-                              _type == 'expense' ? Icons.remove_rounded : Icons.add_rounded,
-                              color: _type == 'expense' ? const Color(0xFFFF6B86) : const Color(0xFF3BD188),
-                            ),
-                          ),
-                          title: Text(item['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600)),
-                          trailing: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(30),
-                              color: Colors.white.withOpacity(0.08),
-                            ),
-                            child: Text(_type.toUpperCase(), style: const TextStyle(fontSize: 11)),
-                          ),
-                          onTap: () => _editCategory(item),
-                          onLongPress: () => _showCategoryActions(item),
-                        ),
-                      );
-                    },
-                  );
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'expense', label: Text('Expense')),
+                  ButtonSegment(value: 'income', label: Text('Income')),
+                ],
+                selected: {_type},
+                onSelectionChanged: (selected) {
+                  _type = selected.first;
+                  _reload();
                 },
               ),
             ),
-          ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _reload,
+                child: FutureBuilder<List<Map<String, dynamic>>>(
+                  future: _future,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return ListView(children: [
+                        Center(
+                            child: Text(friendlyErrorMessage(snapshot.error)))
+                      ]);
+                    }
+                    final items = snapshot.data ?? [];
+                    if (items.isEmpty) {
+                      return ListView(children: const [
+                        SizedBox(height: 120),
+                        Center(child: Text('No categories'))
+                      ]);
+                    }
+                    return ListView.builder(
+                      padding: const EdgeInsets.only(bottom: 108),
+                      itemCount: items.length,
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        final itemType =
+                            (item['type'] ?? _type).toString().toLowerCase();
+                        final icon = categoryIconFor(
+                          name: item['name']?.toString(),
+                          type: itemType,
+                        );
+                        return GlassPanel(
+                          margin: const EdgeInsets.symmetric(
+                              horizontal: 2, vertical: 6),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 6),
+                            leading: Container(
+                              height: 36,
+                              width: 36,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(11),
+                                color: (_type == 'expense'
+                                        ? const Color(0xFFFF6B86)
+                                        : const Color(0xFF3BD188))
+                                    .withOpacity(0.2),
+                              ),
+                              child: Icon(
+                                icon,
+                                color: _type == 'expense'
+                                    ? const Color(0xFFFF6B86)
+                                    : const Color(0xFF3BD188),
+                              ),
+                            ),
+                            title: Text(item['name'] as String? ?? '',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w600)),
+                            trailing: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(30),
+                                color: Colors.white.withOpacity(0.08),
+                              ),
+                              child: Text(_type.toUpperCase(),
+                                  style: const TextStyle(fontSize: 11)),
+                            ),
+                            onTap: () => _editCategory(item),
+                            onLongPress: () => _showCategoryActions(item),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ),
           ],
         ),
       ),
