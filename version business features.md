@@ -32,19 +32,20 @@ Money Manager stays a great free personal finance app, while **Business Pro** tu
 - `purchases_ui_flutter`
 
 ### Planned commercial configuration
-- Offering: `pro`
+- Offering: `default` (confirmed in RevenueCat paywall settings)
 - Packages:
   - `monthly`
   - `yearly`
-  - `lifetime` (optional, if enabled later)
+  - `lifetime` (optional, not enabled currently)
 - Trial:
   - 7-day free trial (attached at store product level)
 
-### Required identifiers (fill later)
-- Entitlement ID: `<REVENUECAT_ENTITLEMENT_ID_FOR_MONEY_MANAGER_PRO>`
-- Monthly package ID: `<MONTHLY_PACKAGE_ID>`
-- Yearly package ID: `<YEARLY_PACKAGE_ID>`
-- Lifetime package ID: `<LIFETIME_PACKAGE_ID>`
+### Required identifiers (confirmed)
+- Entitlement ID (exact): `Money Manager Pro`
+- Entitlement REST API Identifier: `ent122b7de64a9`
+- Monthly package ID: `monthly`
+- Yearly package ID: `yearly`
+- Lifetime package ID: not configured
 
 ## 4) Runtime Access Model (important)
 
@@ -249,7 +250,7 @@ These are features most finance apps either do not have or do poorly. They make 
 4. Add customer info listener for real-time unlock updates.
 
 ## Phase 1.5 — Paywall & customer management
-1. Use `presentPaywallIfNeeded(entitlementId)`.
+1. Use `presentPaywallIfNeeded("Money Manager Pro")`.
 2. Add Customer Center entry point.
 3. Add restore purchases flow.
 
