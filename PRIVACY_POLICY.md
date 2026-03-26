@@ -1,169 +1,167 @@
-# Privacy Policy for Money Management App
+# Privacy Policy for Money Manager
 
-Last updated: 11 March 2026
+Last updated: 19 March 2026
 
-This Privacy Policy describes how your information is collected, used, and shared when you use the Money Management App (the “App”).
+This Privacy Policy explains how we collect, use, disclose, and protect information when you use the Money Manager mobile application (the "App").
 
-By using the App, you agree to the collection and use of information in accordance with this policy.
+By using the App, you agree to this Privacy Policy.
 
 ## 1. Controller and Contact
 
-**Developer:** Joe Boulos  
-**Contact email:** joeboulos94@gmail.com  
+- Developer: Joe Boulos
+- Contact email: joeboulos94@gmail.com
 
-If you have any questions about this Privacy Policy or your data, you can contact me at the email above.
+## 2. Data We Collect
 
-## 2. Information We Collect
+## 2.1 Account Information
 
-### 2.1 Account and Profile Information
+When you sign up or sign in, we may process:
 
-When you sign up and use the App, we may collect:
+- Email address
+- Name/display name (if provided)
+- Authentication-related metadata
 
-- Email address  
-- Name or display name (if you provide it)  
+## 2.2 Financial Data You Enter
 
-This information is used to create and manage your account and to allow you to sign in securely.
+The App processes data you enter, such as:
 
-### 2.2 Financial and App Data You Enter
+- Accounts and balances
+- Transactions (income/expense/transfer), notes, categories
+- Budgets
+- Savings goals and progress
+- Bills and recurring entries
+- Loans and loan payments
 
-The App is a personal finance tool. The data you choose to enter may include:
+## 2.3 Technical and Diagnostic Data
 
-- Accounts / wallets (e.g. account names and balances)  
-- Transactions (income, expenses, transfers, categories, notes you type)  
-- Budgets and budget amounts  
-- Savings goals and progress  
-- Bills and reminders  
-- Recurring transactions  
-- Loans and loan payments (who owes whom, amounts, notes, due dates)
+We may process technical information for stability and security, including:
 
-This information is stored in a database managed by our backend provider (Supabase) and is used only to provide the features of the App to you (e.g. show balances, reports, savings, loans, etc.).
+- Device type and OS
+- App version
+- Crash and diagnostic events
 
-### 2.3 Device and Usage Information
+## 2.4 Advertising Data (AdMob)
 
-When you use the App, we may automatically collect certain technical information, such as:
+If ads are shown, Google Mobile Ads (AdMob) may process data such as:
 
-- Device type and operating system (e.g. Android)  
-- App version  
-- Log data (e.g. basic error logs)  
+- Device identifiers (e.g. Advertising ID)
+- Approximate location
+- Ad interaction signals
 
-This is used to help keep the App secure and to understand and fix technical problems.
+Google resources:
 
-### 2.4 Advertising and Third‑Party SDKs
+- https://policies.google.com/privacy
+- https://policies.google.com/technologies/ads
 
-The App uses **Google Mobile Ads (AdMob)** to show ads. AdMob and its partners may collect and process information such as:
+## 2.5 Subscription and Entitlement Data (RevenueCat)
 
-- Device identifiers (for example, advertising ID)  
-- Approximate location  
-- Interaction with ads
+For paid plans (e.g. Business Pro), we use RevenueCat to manage subscription state and entitlement access.
 
-AdMob uses this information to provide, personalize, and measure ads. For more details, please see Google’s privacy policies:
+RevenueCat may process:
 
-- Google Privacy Policy: https://policies.google.com/privacy  
-- AdMob & Advertising: https://policies.google.com/technologies/ads  
+- App user identifier
+- Purchase/subscription status
+- Product and entitlement metadata
+- Store transaction metadata
 
-You can usually control ad personalization in your device settings (for example, “Opt out of Ads Personalization” or “Reset advertising ID”).
+RevenueCat does not replace app store payment processing; purchases are still processed by Google Play / Apple App Store.
 
-### 2.5 Authentication and Backend Services (Supabase)
+RevenueCat privacy information:
 
-The App uses **Supabase** to handle:
+- https://www.revenuecat.com/privacy
 
-- User authentication (sign up, sign in, password reset, email verification)  
-- Database storage of your data
+## 2.6 Backend and Authentication Provider (Supabase)
+
+We use Supabase for authentication and data storage.
 
 Supabase may process:
 
-- Your email address and authentication data  
-- Your financial app data described in section 2.2  
+- Account identity/auth records
+- Financial and configuration data stored for your account
 
-Supabase acts as a backend service provider on my behalf.  
-You can learn more about Supabase’s privacy practices here: https://supabase.com/privacy
+Supabase privacy:
 
-## 3. How We Use Your Information
+- https://supabase.com/privacy
 
-We use the collected information to:
+## 3. How We Use Data
 
-- Provide, operate and maintain the App  
-- Let you sign up, sign in and secure your account  
-- Store your financial data (transactions, budgets, savings, loans, etc.) and show it back to you  
-- Show ads through AdMob  
-- Understand and fix bugs, crashes or performance issues  
-- Communicate with you if needed for support or important changes
+We use personal data to:
 
-We do **not** sell your personal information.
+- Operate and maintain the App
+- Authenticate users and secure accounts
+- Provide personal and business finance features
+- Enable subscription and entitlement access controls
+- Generate analytics/reports requested by users
+- Diagnose bugs and improve reliability
+- Respond to support requests
 
-## 4. Legal Bases (Where Applicable)
+We do not sell personal data.
 
-Depending on your location, our legal basis for processing your personal data may include:
+## 4. Legal Bases (where applicable)
 
-- **Performance of a contract:** to provide the App and its features to you  
-- **Legitimate interests:** to improve the App and protect against abuse or misuse  
-- **Consent:** for personalized advertising where required by law
+Depending on jurisdiction, legal bases may include:
+
+- Contract performance (delivering App services)
+- Legitimate interests (security, reliability, product improvement)
+- Consent (where required for certain ad/tracking processing)
+- Legal obligations (compliance requests, records where required)
 
 ## 5. Data Sharing
 
-We may share your data with:
+We may share data with service providers strictly as needed to run the App:
 
-- **Service providers** such as Supabase (backend/auth) and Google (AdMob/ads, analytics) who process data on our behalf to provide the App and its functionality.
-- **Law enforcement or authorities** if required by applicable law or to protect legal rights, safety, or prevent fraud or abuse.
+- Supabase (auth/data infrastructure)
+- RevenueCat (subscription/entitlement tooling)
+- Google (AdMob advertising services, where ads are enabled)
+- Store providers (Google Play / Apple App Store)
 
-We do not share your personal financial data with other users or third parties for their own marketing purposes.
+We may also disclose data when legally required or to protect rights/safety and prevent fraud.
 
-## 6. Data Retention
+## 6. Retention
 
-We keep your data for as long as your account is active, or as long as it is necessary to provide the App and comply with legal obligations.
+We retain data while your account is active and as needed to provide services, resolve disputes, enforce agreements, and comply with legal obligations.
 
-If you delete your account or use the “Delete My Data” feature in the App (when available), we will delete or anonymize your personal data from our active systems, subject to any data we may need to keep for legal or security reasons.
+When account/data deletion is requested and verified, we delete or anonymize data from active systems, subject to lawful retention requirements.
 
-## 7. Your Rights and Choices
+## 7. Your Rights
 
-Depending on your location, you may have rights including:
+Depending on your location, you may have rights to:
 
-- **Access:** request a copy of your personal data  
-- **Correction:** ask us to correct inaccurate data  
-- **Deletion:** request deletion of your data (“right to be forgotten”)  
-- **Restriction or objection:** in certain cases, object to or restrict processing  
-- **Data portability:** request your data in a portable format
+- Access personal data
+- Correct inaccurate data
+- Delete data
+- Restrict/object to processing
+- Request portability (where applicable)
 
-You can exercise many of these rights directly inside the App (for example, by deleting data or your account).  
-For anything else, please contact us at **joeboulos94@gmail.com** and we will respond within a reasonable time.
+You can contact us at joeboulos94@gmail.com to exercise rights.
 
-### Ads and Tracking Controls
+## 8. Ads and Tracking Controls
 
-You can usually:
+You can often control ad personalization through your device settings, including resetting or limiting advertising identifiers.
 
-- Turn off ad personalization in **device settings** (Android: Settings → Google → Ads, or similar).  
-- Reset your advertising ID on your device.  
+## 9. Children
 
-## 8. Children’s Privacy
+The App is not intended specifically for children under 13, and we do not knowingly collect personal data from children under 13.
 
-The App is **not specifically directed at children under 13**, and we do not knowingly collect personal information from children under 13.
+If you believe a child submitted personal data, contact us to request deletion.
 
-If you are a parent or guardian and believe your child has provided us with personal information, please contact us at **joeboulos94@gmail.com** so we can take appropriate action, including deleting such information if necessary.
+## 10. Security
 
-If you indicate in Google Play that your target audience includes children, we will comply with the Google Play Families Policy and any related requirements, including limitations on data collection and ad personalization where required.
+We implement reasonable security measures (e.g., authenticated access controls and encrypted transport) to protect data.
 
-## 9. Security
+No system is perfectly secure, and absolute security cannot be guaranteed.
 
-We take reasonable technical and organizational measures to protect your data, including:
+## 11. International Transfers
 
-- Using Supabase authentication and secure connections (HTTPS)  
-- Restricting access to the database by user account (so each user only sees their own data)  
+Data may be processed in countries outside your residence, where service providers operate.
 
-However, no method of transmission or storage is 100% secure, so we cannot guarantee absolute security.
+## 12. Policy Updates
 
-## 10. International Transfers
+We may update this Privacy Policy from time to time. Material updates are reflected by the "Last updated" date.
 
-Your data may be stored and processed on servers located in different countries than your own.  
-By using the App, you understand that your information may be transferred to and processed in other countries where our service providers operate.
+## 13. Contact
 
-## 11. Changes to This Privacy Policy
+For privacy questions or requests:
 
-We may update this Privacy Policy from time to time.  
-If we make material changes, we will update the “Last updated” date at the top of this page. We recommend you review this policy periodically for any changes.
-
-## 12. Contact
-
-If you have any questions, concerns, or requests regarding this Privacy Policy or your personal data, please contact:
-
-**Email:** joeboulos94@gmail.com  
-**Developer:** Joe Boulos
+- Email: joeboulos94@gmail.com
+- Developer: Joe Boulos
