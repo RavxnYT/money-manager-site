@@ -36,7 +36,6 @@ Money Manager stays a great free personal finance app, while **Business Pro** tu
 - Packages:
   - `monthly`
   - `yearly`
-  - `lifetime` (optional, not enabled currently)
 - Trial:
   - 7-day free trial (attached at store product level)
 
@@ -45,7 +44,6 @@ Money Manager stays a great free personal finance app, while **Business Pro** tu
 - Entitlement REST API Identifier: `ent122b7de64a9`
 - Monthly package ID: `monthly`
 - Yearly package ID: `yearly`
-- Lifetime package ID: not configured
 
 ## 4) Runtime Access Model (important)
 
