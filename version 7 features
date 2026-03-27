@@ -1,18 +1,31 @@
 features:
 1) in reports , when category is pressed : show all the transactions under this category by chosen date.
-2) transactions show have date and time not only time , so when it is listed by newest to oldest or the other way , it shows them 
+2) transactions have date and time not only date , so when it is listed by newest to oldest or the other way , it shows them 
    properly not only day based.
 3) transfers: transfer from any accounts or savings or loans to any account or savings or loans
 4) in savings and loans: be able to add any amount of money in any currency and will be automatically converted to the currency of the 
    saving or loan.
 5) add a chart in the report section, and when i press on the chart , it shows each category reports.
 6) add language support for multiple languages : english , arabic , french , russian , chinese ,spanish , hindi , portuguese 
-  (OPTIONAL FOR VERSION 7 IF DONE)
+  (OPTIONAL FOR VERSION 7 IF DONE dont do it unless told to)
 7) be able to edit transactions , if i lowered the amount it was in, refund the amount to the account it was deduced from , if i highered the 
-   transaction amount , it removes the rest from the account it was removed from initially
+   transaction amount , it removes the rest from the account it was removed from initially also edit the note.
+8) when pressing on a transaction in transaction section , be able to delete the transaction , and if deleted refund the amount or redeem it ,
+   also be able to see the note written under the transaction.
+9) when i add a loan , if i owe money  to someone , add the money to my total balance and the account it was added to , also if someones owes me
+   money remove the amount they owe me from the account i gave money from.
+10) most used currencys and categorys and accounts used while adding transaction , to always show first, also be able to search for category ,
+    transaction and account , like a search bar
+
+11) Dynamic Walkthrough for New Users: Implement a step-by-step interactive tour that introduces users to the main features and
+    functionalities of the app upon their first login.
+12) Navbar Active Page Indication
+13) Logout Confirmation Message 
 
 bug fixes:
-1)deleting accounts is working only for 1 account and then stops working
+1) deleting accounts is working only for 1 account and then stops working
+2) when transfering money from an account in usd for example to an another account in LBP for example , it s removing 10$ for example from 
+   the usd account , and sending the usd amount as LBP to the LBP account without converting the 10 $ to 900 000 lbp for example , it s sending it as 10 LBP .
 
 recommended by google :
 1)From Android 15, apps targeting SDK 35 will display edge-to-edge by default. Apps targeting SDK 35 should handle insets to make 
