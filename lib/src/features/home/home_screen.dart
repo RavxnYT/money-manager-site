@@ -160,6 +160,77 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Widget _buildNavItem({
+    required int index,
+    required IconData iconOutlined,
+    required IconData iconFilled,
+    required String label,
+  }) {
+    final selected = _currentIndex == index;
+    return Expanded(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _onTabTapped(index),
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedContainer(
+                  duration: AppDesignTokens.quick,
+                  curve: AppDesignTokens.emphasizedCurve,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? AppDesignTokens.primary.withValues(alpha: 0.22)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: selected
+                          ? AppDesignTokens.primary.withValues(alpha: 0.42)
+                          : Colors.transparent,
+                    ),
+                  ),
+                  child: Icon(
+                    selected ? iconFilled : iconOutlined,
+                    size: 22,
+                    color: selected
+                        ? AppDesignTokens.primary
+                        : Colors.white.withValues(alpha: 0.48),
+                  ),
+                ),
+                const SizedBox(height: 5),
+                SizedBox(
+                  width: double.infinity,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight:
+                            selected ? FontWeight.w700 : FontWeight.w500,
+                        height: 1.05,
+                        color: selected
+                            ? Colors.white
+                            : Colors.white.withValues(alpha: 0.52),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = [
@@ -219,8 +290,30 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
+            tooltip: 'Log out',
             onPressed: () async {
-              await widget.repository.signOut();
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Log out?'),
+                  content: const Text(
+                    'You will need to sign in again to use the app.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Log out'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm == true && context.mounted) {
+                await widget.repository.signOut();
+              }
             },
             icon: const Icon(Icons.logout),
           ),
@@ -278,60 +371,50 @@ class _HomeScreenState extends State<HomeScreen> {
             end: Alignment.bottomCenter,
           ),
           border: Border(
-            top: BorderSide(color: Colors.white.withOpacity(0.08)),
+            top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
           ),
         ),
-        child: Theme(
-          data: Theme.of(context).copyWith(
-            splashColor: Colors.transparent,
-            highlightColor: Colors.transparent,
-          ),
-          child: BottomNavigationBar(
-            currentIndex: _currentIndex,
-            type: BottomNavigationBarType.fixed,
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            selectedItemColor: Colors.white,
-            unselectedItemColor: Colors.white70,
-            selectedFontSize: 10,
-            unselectedFontSize: 10,
-            selectedLabelStyle:
-                const TextStyle(fontWeight: FontWeight.w700, height: 1.0),
-            unselectedLabelStyle:
-                const TextStyle(fontWeight: FontWeight.w500, height: 1.0),
-            items: const [
-              BottomNavigationBarItem(
-                icon: Icon(Icons.dashboard_outlined),
-                activeIcon: Icon(Icons.dashboard),
+        child: SafeArea(
+          top: false,
+          child: Row(
+            children: [
+              _buildNavItem(
+                index: 0,
+                iconOutlined: Icons.dashboard_outlined,
+                iconFilled: Icons.dashboard,
                 label: 'Dashboard',
               ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.swap_horiz_outlined),
-                activeIcon: Icon(Icons.swap_horiz),
+              _buildNavItem(
+                index: 1,
+                iconOutlined: Icons.swap_horiz_outlined,
+                iconFilled: Icons.swap_horiz,
                 label: 'Transactions',
               ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.insights_outlined),
-                activeIcon: Icon(Icons.insights),
+              _buildNavItem(
+                index: 2,
+                iconOutlined: Icons.insights_outlined,
+                iconFilled: Icons.insights,
                 label: 'Reports',
               ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.savings_outlined),
-                activeIcon: Icon(Icons.savings),
+              _buildNavItem(
+                index: 3,
+                iconOutlined: Icons.savings_outlined,
+                iconFilled: Icons.savings,
                 label: 'Savings',
               ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.people_outline),
-                activeIcon: Icon(Icons.people),
+              _buildNavItem(
+                index: 4,
+                iconOutlined: Icons.people_outline,
+                iconFilled: Icons.people,
                 label: 'Loans',
               ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.settings_outlined),
-                activeIcon: Icon(Icons.settings),
+              _buildNavItem(
+                index: 5,
+                iconOutlined: Icons.settings_outlined,
+                iconFilled: Icons.settings,
                 label: 'Settings',
               ),
             ],
-            onTap: _onTabTapped,
           ),
         ),
       ),

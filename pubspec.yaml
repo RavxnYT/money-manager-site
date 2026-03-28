@@ -20,6 +20,11 @@ dependencies:
   app_links: ^6.4.1
   google_mobile_ads: ^7.0.0
   connectivity_plus: ^6.1.1
+  fl_chart: ^1.2.0
+  purchases_flutter: ^9.15.1
+  purchases_ui_flutter: ^9.15.1
+  share_plus: ^12.0.1
+  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:

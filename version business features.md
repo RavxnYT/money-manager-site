@@ -382,3 +382,51 @@ Money Manager should feel like:
 - **powerful enough** for business operators,
 - and **credible enough** to be trusted as a finance command center.
 
+## 15) Current Build Status
+
+### Implemented in code
+- RevenueCat Flutter dependencies added:
+  - `purchases_flutter`
+  - `purchases_ui_flutter`
+- RevenueCat runtime service added with:
+  - configure
+  - auth user sync
+  - customer info refresh
+  - paywall trigger
+  - restore purchases
+  - customer center entry point
+- Profile/business foundation added in code + SQL migration:
+  - `business_mode_enabled`
+  - `business_pro_status`
+  - `business_pro_updated_at`
+  - `business_pro_latest_expiration`
+  - `business_pro_platform`
+- Settings now includes:
+  - Business Plan screen
+  - Personal/Business mode switch behavior
+  - restore/manage/refresh subscription actions
+  - workspace foundation entry point
+- Business Pro gating added for:
+  - support ad visibility
+  - custom category icon/color branding
+  - advanced reports
+  - CSV export
+- Collaboration foundation added:
+  - `organizations`
+  - `organization_members`
+  - active workspace preference fields
+  - workspace screen for phase rollout
+- Focused unit tests added for:
+  - entitlement/mode gating logic
+  - category branding helpers
+
+### Still required before production activation
+- Add real RevenueCat public SDK keys into `.env`.
+- Configure RevenueCat offering/paywall/customer center in the dashboard.
+- Run the new Supabase migration:
+  - `20260330020000_business_pro_foundation.sql`
+- Apply the migration to the real project before expecting profile/workspace fields to persist remotely.
+- Shared organization financial data is still a **foundation-only rollout**:
+  - workspace preference is ready
+  - full org-scoped ledgers/RLS propagation across finance tables is still phase 2
+

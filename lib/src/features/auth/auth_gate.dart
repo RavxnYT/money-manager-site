@@ -4,9 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:app_links/app_links.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/billing/business_entitlement_service.dart';
 import '../../core/security/app_lock_gate.dart';
 import '../../data/app_repository.dart';
-import '../home/home_screen.dart';
+import '../home/mode_router_screen.dart';
 import 'login_screen.dart';
 import 'password_reset_screen.dart';
 
@@ -20,6 +21,7 @@ class AuthGate extends StatefulWidget {
 class _AuthGateState extends State<AuthGate> {
   late final AppRepository _repo;
   StreamSubscription<Uri>? _linkSubscription;
+  StreamSubscription<AuthState>? _authSubscription;
   bool _showEmailConfirmNotice = false;
 
   @override
@@ -27,6 +29,7 @@ class _AuthGateState extends State<AuthGate> {
     super.initState();
     _repo = AppRepository(Supabase.instance.client);
     _initDeepLinks();
+    _initBillingSync();
   }
 
   Future<void> _initDeepLinks() async {
@@ -48,9 +51,31 @@ class _AuthGateState extends State<AuthGate> {
     }
   }
 
+  void _initBillingSync() {
+    Future<void>.microtask(
+      () => _syncBusinessSession(Supabase.instance.client.auth.currentUser),
+    );
+    _authSubscription =
+        Supabase.instance.client.auth.onAuthStateChange.listen((state) {
+      _syncBusinessSession(state.session?.user);
+    });
+  }
+
+  Future<void> _syncBusinessSession(User? user) async {
+    try {
+      await BusinessEntitlementService.instance.syncUser(user);
+      if (user != null) {
+        await _repo.refreshBusinessEntitlement();
+      }
+    } catch (_) {
+      // Billing/profile sync should never block normal app authentication.
+    }
+  }
+
   @override
   void dispose() {
     _linkSubscription?.cancel();
+    _authSubscription?.cancel();
     super.dispose();
   }
 
@@ -74,7 +99,7 @@ class _AuthGateState extends State<AuthGate> {
           );
         }
         return AppLockGate(
-          child: HomeScreen(repository: _repo),
+          child: ModeRouterScreen(repository: _repo),
         );
       },
     );

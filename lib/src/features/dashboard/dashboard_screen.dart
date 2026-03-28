@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/categories/category_icon_utils.dart';
@@ -9,6 +10,8 @@ import '../../core/friendly_error.dart';
 import '../../core/ui/animated_appear.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/glass_panel.dart';
+import '../../core/ui/searchable_id_picker_sheet.dart';
+import '../../core/usage/transaction_creation_usage_store.dart';
 import '../../data/app_repository.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -299,7 +302,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final amount = TextEditingController();
     final note = TextEditingController();
     DateTime date = DateTime.now();
-    var categories = await widget.repository.fetchCategories(kind);
+    final usageScores = await TransactionCreationUsageStore.loadScores();
+    var categories = TransactionCreationUsageStore.sortCategories(
+      await widget.repository.fetchCategories(kind),
+      usageScores,
+      kind,
+    );
     String? categoryId =
         categories.isNotEmpty ? categories.first['id']?.toString() : null;
 
@@ -307,7 +315,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) {
+          String quickCategoryLabel() {
+            if (categoryId == null) return 'Select category';
+            for (final e in categories) {
+              if (e['id']?.toString() == categoryId) {
+                return (e['name'] ?? '').toString();
+              }
+            }
+            return 'Select category';
+          }
+
+          String? quickCategoryName() {
+            if (categoryId == null) return null;
+            for (final e in categories) {
+              if (e['id']?.toString() == categoryId) {
+                return e['name']?.toString();
+              }
+            }
+            return null;
+          }
+
+          return AlertDialog(
           title: Text('Quick Add • ${(account['name'] ?? '').toString()}'),
           content: SizedBox(
             width: 420,
@@ -324,46 +353,86 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ],
                     onChanged: (value) async {
                       if (value == null) return;
-                      final freshCategories =
+                      final fresh =
                           await widget.repository.fetchCategories(value);
-                      if (!mounted) return;
+                      if (!context.mounted) return;
+                      final sorted = TransactionCreationUsageStore.sortCategories(
+                        fresh,
+                        usageScores,
+                        value,
+                      );
                       setInnerState(() {
                         kind = value;
-                        categories = freshCategories;
-                        categoryId = categories.isNotEmpty
-                            ? categories.first['id']?.toString()
+                        categories = sorted;
+                        categoryId = sorted.isNotEmpty
+                            ? sorted.first['id']?.toString()
                             : null;
                       });
                     },
                     decoration: const InputDecoration(labelText: 'Type'),
                   ),
                   const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                    value:
-                        categories.any((e) => e['id']?.toString() == categoryId)
-                            ? categoryId
-                            : null,
-                    items: categories
-                        .map((e) => DropdownMenuItem<String>(
-                              value: e['id']?.toString(),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    categoryIconFor(
-                                      name: e['name']?.toString(),
-                                      type: kind,
-                                    ),
-                                    size: 18,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text((e['name'] ?? '').toString()),
-                                ],
-                              ),
-                            ))
-                        .toList(),
-                    onChanged: (value) =>
-                        setInnerState(() => categoryId = value),
+                  InputDecorator(
                     decoration: const InputDecoration(labelText: 'Category'),
+                    child: InkWell(
+                      onTap: categories.isEmpty
+                          ? null
+                          : () async {
+                              final id = await showSearchableIdPickerSheet(
+                                context,
+                                title: 'Category',
+                                searchHint: 'Search category',
+                                items: categories,
+                                selectedId: categoryId,
+                                itemTitle: (e) => (e['name'] ?? '').toString(),
+                                leadingForRow: (e) => Icon(
+                                  categoryIconFor(
+                                    name: e['name']?.toString(),
+                                    type: kind,
+                                  ),
+                                  size: 20,
+                                ),
+                                matches: (row, q) {
+                                  final name = (row['name'] ?? '')
+                                      .toString()
+                                      .toLowerCase();
+                                  return name.contains(q);
+                                },
+                              );
+                              if (id != null) {
+                                setInnerState(() => categoryId = id);
+                              }
+                            },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 12,
+                          horizontal: 2,
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              categoryIconFor(
+                                name: quickCategoryName(),
+                                type: kind,
+                              ),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(quickCategoryLabel()),
+                            ),
+                            Icon(
+                              Icons.manage_search,
+                              size: 22,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withValues(alpha: 0.55),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 8),
                   TextField(
@@ -390,12 +459,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           lastDate: DateTime(2100),
                           initialDate: date,
                         );
-                        if (selected != null) {
-                          setInnerState(() => date = selected);
-                        }
+                        if (selected == null || !context.mounted) return;
+                        final time = await showTimePicker(
+                          context: context,
+                          initialTime: TimeOfDay.fromDateTime(date),
+                        );
+                        if (!context.mounted) return;
+                        final t = time ?? TimeOfDay.fromDateTime(date);
+                        setInnerState(() {
+                          date = DateTime(
+                            selected.year,
+                            selected.month,
+                            selected.day,
+                            t.hour,
+                            t.minute,
+                          );
+                        });
                       },
                       child: Text(
-                        'Date: ${date.toIso8601String().split('T').first}',
+                        'Date & time: ${DateFormat('yyyy-MM-dd HH:mm').format(date)}',
                       ),
                     ),
                   ),
@@ -413,7 +495,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: const Text('Save'),
             ),
           ],
-        ),
+        );
+        },
       ),
     );
 
@@ -431,6 +514,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           amount: parsedAmount,
           transactionDate: date,
           note: note.text.trim().isEmpty ? null : note.text.trim(),
+        );
+        await TransactionCreationUsageStore.record(
+          accountIds: [accountId],
+          categoryId: categoryId,
+          categoryKind: kind,
+          entryCurrency: null,
         );
         if (!mounted) return;
         setState(() {

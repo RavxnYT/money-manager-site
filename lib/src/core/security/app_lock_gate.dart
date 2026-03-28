@@ -86,49 +86,53 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     if (_checking) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
+      return Scaffold(
+        body: SafeArea(
+          child: Center(child: CircularProgressIndicator()),
+        ),
       );
     }
 
     if (!_isLocked) return widget.child;
 
     return Scaffold(
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 380),
-          child: Card(
-            margin: const EdgeInsets.all(20),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.lock_outline_rounded, size: 46),
-                  const SizedBox(height: 12),
-                  Text('App Locked', style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 8),
-                  const Text('Enter passcode to continue'),
-                  const SizedBox(height: 14),
-                  TextField(
-                    obscureText: true,
-                    keyboardType: TextInputType.number,
-                    onChanged: (value) => _passcodeInput = value.trim(),
-                    decoration: const InputDecoration(labelText: 'Passcode'),
-                  ),
-                  if (_error != null) ...[
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: Card(
+              margin: const EdgeInsets.all(20),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.lock_outline_rounded, size: 46),
+                    const SizedBox(height: 12),
+                    Text('App Locked', style: Theme.of(context).textTheme.titleLarge),
                     const SizedBox(height: 8),
-                    Text(_error!, style: TextStyle(color: Colors.red.shade300)),
-                  ],
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: _unlockWithPasscode,
-                      child: const Text('Unlock'),
+                    const Text('Enter passcode to continue'),
+                    const SizedBox(height: 14),
+                    TextField(
+                      obscureText: true,
+                      keyboardType: TextInputType.number,
+                      onChanged: (value) => _passcodeInput = value.trim(),
+                      decoration: const InputDecoration(labelText: 'Passcode'),
                     ),
-                  ),
-                ],
+                    if (_error != null) ...[
+                      const SizedBox(height: 8),
+                      Text(_error!, style: TextStyle(color: Colors.red.shade300)),
+                    ],
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: _unlockWithPasscode,
+                        child: const Text('Unlock'),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

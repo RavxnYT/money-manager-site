@@ -147,176 +147,209 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF0A1022), Color(0xFF151F38), Color(0xFF0A1022)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+      body: SafeArea(
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF0A1022), Color(0xFF151F38), Color(0xFF0A1022)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
           ),
-        ),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 430),
-            child: AnimatedAppear(
-              delayMs: 80,
-              child: GlassPanel(
-                margin: const EdgeInsets.all(18),
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(22),
-                  child: Form(
-                  key: _formKey,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        height: 50,
-                        width: 50,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(14),
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF7B8BFF), Color(0xFF58C2FF)],
-                          ),
-                        ),
-                        child: const Icon(Icons.account_balance_wallet_rounded, color: Colors.white),
-                      ),
-                      const SizedBox(height: 14),
-                      Text(
-                        _isLogin ? 'Welcome back' : 'Create your account',
-                        style: Theme.of(context).textTheme.headlineSmall,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _isLogin
-                            ? 'Sign in to continue managing your money.'
-                            : 'Start tracking income, expenses, budgets, and savings.',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white70),
-                      ),
-                      if (widget.noticeMessage != null) ...[
-                        const SizedBox(height: 10),
-                        Text(
-                          widget.noticeMessage!,
-                          style: const TextStyle(color: Color(0xFF7EE787), fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                      const SizedBox(height: 18),
-                      if (!_isLogin)
-                        TextFormField(
-                          controller: _nameController,
-                          decoration: const InputDecoration(labelText: 'Full Name'),
-                          validator: (value) {
-                            if (!_isLogin) {
-                              if (value == null || value.trim().isEmpty) return 'Enter your name';
-                            }
-                            return null;
-                          },
-                        ),
-                      if (!_isLogin) const SizedBox(height: 12),
-                      TextFormField(
-                        key: const Key('login_email_field'),
-                        controller: _emailController,
-                        decoration: const InputDecoration(labelText: 'Email'),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) return 'Enter your email';
-                          if (!value.contains('@')) return 'Enter a valid email';
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        key: const Key('login_password_field'),
-                        controller: _passwordController,
-                        obscureText: _obscurePassword,
-                        decoration: InputDecoration(
-                          labelText: 'Password',
-                          suffixIcon: IconButton(
-                            onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                            icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
-                          ),
-                        ),
-                        validator: (value) {
-                          if (value == null || value.length < 6) {
-                            return 'Use at least 6 characters';
-                          }
-                          return null;
-                        },
-                      ),
-                      if (_isLogin) ...[
-                        const SizedBox(height: 6),
-                        Wrap(
-                          alignment: WrapAlignment.spaceBetween,
-                          spacing: 8,
-                          runSpacing: 4,
-                          children: [
-                            TextButton(
-                              onPressed: _isLoading ? null : _sendResetPassword,
-                              child: const Text('Forgot password?'),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 430),
+              child: AnimatedAppear(
+                delayMs: 80,
+                child: GlassPanel(
+                  margin: const EdgeInsets.all(18),
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(22),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            height: 50,
+                            width: 50,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(14),
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF7B8BFF), Color(0xFF58C2FF)],
+                              ),
                             ),
-                            TextButton(
-                              onPressed: _isLoading ? null : _resendVerificationEmail,
-                              child: const Text('Resend verification'),
+                            child: const Icon(Icons.account_balance_wallet_rounded,
+                                color: Colors.white),
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            _isLogin ? 'Welcome back' : 'Create your account',
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _isLogin
+                                ? 'Sign in to continue managing your money.'
+                                : 'Start tracking income, expenses, budgets, and savings.',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(color: Colors.white70),
+                          ),
+                          if (widget.noticeMessage != null) ...[
+                            const SizedBox(height: 10),
+                            Text(
+                              widget.noticeMessage!,
+                              style: const TextStyle(
+                                  color: Color(0xFF7EE787),
+                                  fontWeight: FontWeight.w600),
                             ),
                           ],
-                        ),
-                      ],
-                      if (!_isLogin) const SizedBox(height: 12),
-                      if (!_isLogin)
-                        TextFormField(
-                          controller: _confirmPasswordController,
-                          obscureText: _obscureConfirmPassword,
-                          decoration: InputDecoration(
-                            labelText: 'Confirm Password',
-                            suffixIcon: IconButton(
-                              onPressed: () => setState(
-                                () => _obscureConfirmPassword = !_obscureConfirmPassword,
+                          const SizedBox(height: 18),
+                          if (!_isLogin)
+                            TextFormField(
+                              controller: _nameController,
+                              decoration:
+                                  const InputDecoration(labelText: 'Full Name'),
+                              validator: (value) {
+                                if (!_isLogin) {
+                                  if (value == null || value.trim().isEmpty) {
+                                    return 'Enter your name';
+                                  }
+                                }
+                                return null;
+                              },
+                            ),
+                          if (!_isLogin) const SizedBox(height: 12),
+                          TextFormField(
+                            key: const Key('login_email_field'),
+                            controller: _emailController,
+                            decoration: const InputDecoration(labelText: 'Email'),
+                            validator: (value) {
+                              if (value == null || value.trim().isEmpty) {
+                                return 'Enter your email';
+                              }
+                              if (!value.contains('@')) {
+                                return 'Enter a valid email';
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 12),
+                          TextFormField(
+                            key: const Key('login_password_field'),
+                            controller: _passwordController,
+                            obscureText: _obscurePassword,
+                            decoration: InputDecoration(
+                              labelText: 'Password',
+                              suffixIcon: IconButton(
+                                onPressed: () => setState(
+                                    () => _obscurePassword = !_obscurePassword),
+                                icon: Icon(_obscurePassword
+                                    ? Icons.visibility_off
+                                    : Icons.visibility),
                               ),
-                              icon: Icon(
-                                _obscureConfirmPassword ? Icons.visibility_off : Icons.visibility,
+                            ),
+                            validator: (value) {
+                              if (value == null || value.length < 6) {
+                                return 'Use at least 6 characters';
+                              }
+                              return null;
+                            },
+                          ),
+                          if (_isLogin) ...[
+                            const SizedBox(height: 6),
+                            Wrap(
+                              alignment: WrapAlignment.spaceBetween,
+                              spacing: 8,
+                              runSpacing: 4,
+                              children: [
+                                TextButton(
+                                  onPressed:
+                                      _isLoading ? null : _sendResetPassword,
+                                  child: const Text('Forgot password?'),
+                                ),
+                                TextButton(
+                                  onPressed: _isLoading
+                                      ? null
+                                      : _resendVerificationEmail,
+                                  child: const Text('Resend verification'),
+                                ),
+                              ],
+                            ),
+                          ],
+                          if (!_isLogin) const SizedBox(height: 12),
+                          if (!_isLogin)
+                            TextFormField(
+                              controller: _confirmPasswordController,
+                              obscureText: _obscureConfirmPassword,
+                              decoration: InputDecoration(
+                                labelText: 'Confirm Password',
+                                suffixIcon: IconButton(
+                                  onPressed: () => setState(
+                                    () => _obscureConfirmPassword =
+                                        !_obscureConfirmPassword,
+                                  ),
+                                  icon: Icon(
+                                    _obscureConfirmPassword
+                                        ? Icons.visibility_off
+                                        : Icons.visibility,
+                                  ),
+                                ),
+                              ),
+                              validator: (value) {
+                                if (_isLogin) return null;
+                                if (value == null || value.isEmpty) {
+                                  return 'Please confirm your password';
+                                }
+                                if (value != _passwordController.text) {
+                                  return 'Passwords do not match';
+                                }
+                                return null;
+                              },
+                            ),
+                          if (_error != null) ...[
+                            const SizedBox(height: 12),
+                            Text(_error!,
+                                style:
+                                    TextStyle(color: Colors.red.shade300)),
+                          ],
+                          const SizedBox(height: 18),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton(
+                              onPressed: _isLoading ? null : _submit,
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
+                                child: Text(_isLoading
+                                    ? 'Please wait...'
+                                    : (_isLogin
+                                        ? 'Sign In'
+                                        : 'Sign Up')),
                               ),
                             ),
                           ),
-                          validator: (value) {
-                            if (_isLogin) return null;
-                            if (value == null || value.isEmpty) {
-                              return 'Please confirm your password';
-                            }
-                            if (value != _passwordController.text) {
-                              return 'Passwords do not match';
-                            }
-                            return null;
-                          },
-                        ),
-                      if (_error != null) ...[
-                        const SizedBox(height: 12),
-                        Text(_error!, style: TextStyle(color: Colors.red.shade300)),
-                      ],
-                      const SizedBox(height: 18),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton(
-                          onPressed: _isLoading ? null : _submit,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: Text(_isLoading ? 'Please wait...' : (_isLogin ? 'Sign In' : 'Sign Up')),
+                          const SizedBox(height: 6),
+                          Align(
+                            child: TextButton(
+                              onPressed: _isLoading
+                                  ? null
+                                  : () => setState(() {
+                                        _isLogin = !_isLogin;
+                                        _error = null;
+                                      }),
+                              child: Text(_isLogin
+                                  ? 'Need an account? Sign up'
+                                  : 'Already have an account? Sign in'),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
-                      const SizedBox(height: 6),
-                      Align(
-                        child: TextButton(
-                          onPressed: _isLoading
-                              ? null
-                              : () => setState(() {
-                                    _isLogin = !_isLogin;
-                                    _error = null;
-                                  }),
-                          child: Text(_isLogin ? 'Need an account? Sign up' : 'Already have an account? Sign in'),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
                 ),
               ),
             ),

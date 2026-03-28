@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'core/ui/app_design_tokens.dart';
 import 'features/auth/auth_gate.dart';
@@ -15,6 +17,24 @@ class MoneyManagementApp extends StatelessWidget {
     );
     return MaterialApp(
       title: 'Money Management',
+      builder: (context, child) {
+        final content = child ?? const SizedBox.shrink();
+        if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+          return content;
+        }
+        // Omit bar colors: on API 35+ they trigger deprecated Window#setStatusBarColor /
+        // setNavigationBarColor via the platform channel. Transparent bars come from
+        // Android themes + enableEdgeToEdge(); keep icon brightness + contrast flags only.
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: const SystemUiOverlayStyle(
+            statusBarIconBrightness: Brightness.light,
+            systemNavigationBarIconBrightness: Brightness.light,
+            systemStatusBarContrastEnforced: false,
+            systemNavigationBarContrastEnforced: false,
+          ),
+          child: content,
+        );
+      },
       theme: ThemeData(
         colorScheme: scheme,
         useMaterial3: true,

@@ -32,14 +32,33 @@ String friendlyErrorMessage(Object? error) {
 
   if (error is PostgrestException) {
     final msg = (error.message).toLowerCase();
+    if ((error.code ?? '').toUpperCase() == 'PGRST203' ||
+        msg.contains('best candidate function')) {
+      return 'Your transaction database functions are out of date. Apply the latest Supabase migration and try again.';
+    }
     if (msg.contains('insufficient balance')) {
       return 'Not enough balance in the selected account.';
     }
     if (msg.contains('account not found')) {
       return 'Selected account was not found. Please choose another account.';
     }
+    if (msg.contains('category not found')) {
+      return 'Selected category was not found. Please refresh and try again.';
+    }
+    if (msg.contains('category type must match transaction kind')) {
+      return 'Pick a category that matches the selected transaction type.';
+    }
+    if (msg.contains('invalid transfer accounts')) {
+      return 'Choose two different accounts for the transfer.';
+    }
+    if (msg.contains('cross-currency transfer requires')) {
+      return 'The app could not prepare the converted transfer amount. Please try again.';
+    }
     if (msg.contains('savings goal not found')) {
       return 'Savings goal was not found. Please refresh and try again.';
+    }
+    if (msg.contains('infinite recursion detected in policy')) {
+      return 'Workspace permissions are misconfigured in Supabase. Apply the latest workspace migration.';
     }
     if (msg.contains('violates foreign key constraint')) {
       return 'This item is still used by transactions. Update/delete related transactions first.';

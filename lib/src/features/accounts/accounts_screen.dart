@@ -219,26 +219,97 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   Future<void> _deleteAccount(Map<String, dynamic> account) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Delete Account'),
-        content: Text('Delete "${account['name']}"? This cannot be undone.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Delete')),
-        ],
-      ),
-    );
-    if (ok == true) {
+    final passwordController = TextEditingController();
+    String? passwordError;
+    var confirmed = false;
+    try {
+      final result = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setInnerState) {
+            return AlertDialog(
+              title: const Text('Delete account'),
+              content: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'This permanently deletes "${account['name']}" and:\n\n'
+                      '• All transactions that use this account (including transfers)\n'
+                      '• Recurring rules and bills linked to this account\n'
+                      '• Savings contributions from this wallet (goals are recalculated)\n'
+                      '• Loan payment records for this wallet\n\n'
+                      'Loans may remain with no principal account linked.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: passwordController,
+                      obscureText: true,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      textInputAction: TextInputAction.done,
+                      decoration: InputDecoration(
+                        labelText: 'Confirm your password',
+                        errorText: passwordError,
+                      ),
+                      onChanged: (_) =>
+                          setInnerState(() => passwordError = null),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    final p = passwordController.text;
+                    if (p.isEmpty) {
+                      setInnerState(
+                        () => passwordError = 'Enter your password',
+                      );
+                      return;
+                    }
+                    try {
+                      await widget.repository.verifyCurrentUserPassword(p);
+                      if (!dialogContext.mounted) return;
+                      Navigator.pop(dialogContext, true);
+                    } catch (e) {
+                      setInnerState(() {
+                        passwordError = e is StateError
+                            ? e.message
+                            : friendlyErrorMessage(e);
+                      });
+                    }
+                  },
+                  child: const Text('Delete account'),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+      confirmed = result == true;
+    } finally {
+      passwordController.dispose();
+    }
+
+    if (!confirmed || !mounted) return;
+
+    try {
       await widget.repository
           .deleteAccount(accountId: account['id'].toString());
       if (!mounted) return;
       _reload();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(e))),
+      );
     }
   }
 

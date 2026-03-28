@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'category_branding.dart';
+
 String _normalizeCategoryName(String? name) {
   return (name ?? '').trim().toLowerCase();
 }
@@ -7,7 +9,11 @@ String _normalizeCategoryName(String? name) {
 IconData categoryIconFor({
   required String? name,
   required String? type,
+  String? iconKey,
 }) {
+  final explicitIcon = businessCategoryIconForKey(iconKey);
+  if (explicitIcon != null) return explicitIcon;
+
   final normalized = _normalizeCategoryName(name);
   final categoryType = (type ?? '').trim().toLowerCase();
 

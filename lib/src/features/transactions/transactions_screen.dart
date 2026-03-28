@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/categories/category_icon_utils.dart';
+import '../../core/datetime/transaction_datetime.dart';
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/searchable_id_picker_sheet.dart';
+import '../../core/usage/transaction_creation_usage_store.dart';
 import '../../data/app_repository.dart';
 
 class TransactionsScreen extends StatefulWidget {
@@ -49,10 +52,30 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   DateTime _transactionDateValue(Map<String, dynamic> row) {
-    final raw = row['transaction_date']?.toString();
-    if (raw == null || raw.isEmpty)
-      return DateTime.fromMillisecondsSinceEpoch(0);
-    return DateTime.tryParse(raw) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    return parseTransactionDate(row['transaction_date']) ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  String? _managedTransactionSource(Map<String, dynamic> row) {
+    final raw = (row['source_type'] ?? '').toString().trim();
+    return raw.isEmpty ? null : raw;
+  }
+
+  bool _isManagedTransaction(Map<String, dynamic> row) {
+    return _managedTransactionSource(row) != null;
+  }
+
+  String _managedTransactionOwner(Map<String, dynamic> row) {
+    switch (_managedTransactionSource(row)) {
+      case 'savings_contribution':
+      case 'savings_refund':
+        return 'Savings Goals';
+      case 'loan_principal':
+      case 'loan_payment':
+        return 'Loans';
+      default:
+        return 'another feature';
+    }
   }
 
   @override
@@ -124,10 +147,33 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                 if (search.isEmpty) return true;
                 final account = _relationName(row['account']).toLowerCase();
                 final category = _relationName(row['categories']).toLowerCase();
+                final transferTo =
+                    _relationName(row['transfer_account']).toLowerCase();
                 final note = (row['note'] ?? '').toString().toLowerCase();
-                return account.contains(search) ||
+                if (account.contains(search) ||
                     category.contains(search) ||
-                    note.contains(search);
+                    transferTo.contains(search) ||
+                    note.contains(search)) {
+                  return true;
+                }
+                if (kind.contains(search)) return true;
+                final dateLabel =
+                    formatTransactionDateForDisplay(row['transaction_date'])
+                        .toLowerCase();
+                if (dateLabel.contains(search)) return true;
+                final searchAmt = search.replaceAll(',', '');
+                if (searchAmt.isNotEmpty) {
+                  final amtRaw =
+                      ((row['amount'] as num?) ?? 0).toDouble().toString();
+                  final disp = row['display_amount'];
+                  final dispStr =
+                      disp == null ? '' : (disp as num).toDouble().toString();
+                  if (amtRaw.contains(searchAmt) ||
+                      dispStr.contains(searchAmt)) {
+                    return true;
+                  }
+                }
+                return false;
               }).toList()
                 ..sort((a, b) {
                   final amountA = ((a['amount'] as num?) ?? 0).toDouble();
@@ -163,7 +209,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       controller: _searchController,
                       onChanged: (_) => setState(() {}),
                       decoration: const InputDecoration(
-                        labelText: 'Search by account, category, or note',
+                        labelText:
+                            'Search account, category, note, amount, date, or type',
                         prefixIcon: Icon(Icons.search),
                       ),
                     ),
@@ -238,11 +285,29 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                               final transferAccount =
                                   _relationName(row['transfer_account']);
                               final category = _relationName(row['categories']);
-                              final date =
-                                  row['transaction_date']?.toString() ?? '';
-                              final subtitle = kind == 'transfer'
+                              final date = formatTransactionDateForDisplay(
+                                  row['transaction_date']);
+                              var subtitle = kind == 'transfer'
                                   ? '$account -> $transferAccount • $date'
                                   : '$account • $category • $date';
+                              if (kind == 'transfer') {
+                                final destCur =
+                                    _relationCurrency(row['transfer_account'])
+                                        .toUpperCase();
+                                final srcCur = _relationCurrency(row['account'])
+                                    .toUpperCase();
+                                final debit =
+                                    ((row['amount'] as num?) ?? 0).toDouble();
+                                final creditRaw = row['transfer_credit_amount'];
+                                final credit = creditRaw != null
+                                    ? ((creditRaw as num).toDouble())
+                                    : debit;
+                                if (srcCur != destCur ||
+                                    (credit - debit).abs() > 0.005) {
+                                  subtitle =
+                                      '$subtitle\n+${formatMoney(credit, currencyCode: destCur)} to $transferAccount';
+                                }
+                              }
                               final isExpense = kind == 'expense';
                               final isIncome = kind == 'income';
                               final amountColor = isIncome
@@ -256,6 +321,135 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                       name: category,
                                       type: kind,
                                     );
+                              final ledgerAmount =
+                                  ((row['amount'] as num?) ?? 0).toDouble();
+                              final srcCurLedger =
+                                  _relationCurrency(row['account']);
+                              final noteText =
+                                  (row['note'] ?? '').toString().trim();
+                              final isManaged = _isManagedTransaction(row);
+                              if (isManaged) {
+                                subtitle = '$subtitle\nManaged from '
+                                    '${_managedTransactionOwner(row)}';
+                              }
+                              Widget? transferDeleteExtra;
+                              if (kind == 'transfer') {
+                                final destCur =
+                                    _relationCurrency(row['transfer_account']);
+                                final creditRaw = row['transfer_credit_amount'];
+                                final credit = creditRaw != null
+                                    ? ((creditRaw as num).toDouble())
+                                    : ledgerAmount;
+                                if (srcCurLedger.toUpperCase() !=
+                                        destCur.toUpperCase() ||
+                                    (credit - ledgerAmount).abs() > 0.005) {
+                                  transferDeleteExtra = Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Text(
+                                      'Destination: '
+                                      '${formatMoney(credit, currencyCode: destCur)}',
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                  );
+                                }
+                              }
+
+                              final tile = Card(
+                                margin: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 7),
+                                child: ListTile(
+                                  onTap: () async {
+                                    if (isManaged) {
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            'This transaction is managed from '
+                                            '${_managedTransactionOwner(row)}. '
+                                            'Edit or delete it from that screen instead.',
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    final id = row['id']?.toString() ?? '';
+                                    if (widget.repository
+                                        .isOfflinePendingId(id)) {
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Sync when online before editing this transaction.',
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    final saved = await showDialog<bool>(
+                                      context: context,
+                                      builder: (ctx) => _EditTransactionDialog(
+                                        repository: widget.repository,
+                                        initial: Map<String, dynamic>.from(row),
+                                      ),
+                                    );
+                                    if (saved == true) _reload();
+                                  },
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 14, vertical: 6),
+                                  leading: Container(
+                                    height: 42,
+                                    width: 42,
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(13),
+                                      color: amountColor.withOpacity(0.18),
+                                    ),
+                                    child: Icon(
+                                      leadingIcon,
+                                      color: amountColor,
+                                    ),
+                                  ),
+                                  title: Text(
+                                    formatMoney(amount,
+                                        currencyCode: accountCurrency),
+                                    style: TextStyle(
+                                      color: amountColor,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 17,
+                                    ),
+                                  ),
+                                  subtitle: Padding(
+                                    padding: const EdgeInsets.only(top: 3),
+                                    child: Text(
+                                      subtitle,
+                                      style: const TextStyle(
+                                          color: Colors.white70),
+                                    ),
+                                  ),
+                                  trailing: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(30),
+                                      color: Colors.white.withOpacity(0.08),
+                                    ),
+                                    child: Text(
+                                      isManaged
+                                          ? 'MANAGED'
+                                          : kind.toUpperCase(),
+                                      style: const TextStyle(fontSize: 11),
+                                    ),
+                                  ),
+                                ),
+                              );
+
+                              if (isManaged) {
+                                return tile;
+                              }
+
                               return Dismissible(
                                 key: ValueKey(row['id']),
                                 direction: DismissDirection.endToStart,
@@ -266,58 +460,89 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                   child: const Icon(Icons.delete,
                                       color: Colors.white),
                                 ),
+                                confirmDismiss: (_) async {
+                                  final dest = await showDialog<bool>(
+                                    context: context,
+                                    barrierDismissible: false,
+                                    builder: (ctx) => AlertDialog(
+                                      title: const Text('Delete transaction?'),
+                                      content: SingleChildScrollView(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              'The amount will be refunded or '
+                                              'removed from the related '
+                                              'account(s) so your balance stays '
+                                              'correct.',
+                                              style: Theme.of(ctx)
+                                                  .textTheme
+                                                  .bodyMedium,
+                                            ),
+                                            const SizedBox(height: 16),
+                                            Text(
+                                              kind == 'transfer'
+                                                  ? '$account → $transferAccount'
+                                                  : account,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              '${kind.toUpperCase()} • '
+                                              '${formatMoney(ledgerAmount, currencyCode: srcCurLedger)}',
+                                            ),
+                                            Text(date),
+                                            if (transferDeleteExtra != null)
+                                              transferDeleteExtra,
+                                            const SizedBox(height: 16),
+                                            Text(
+                                              'Note',
+                                              style: Theme.of(ctx)
+                                                  .textTheme
+                                                  .labelLarge,
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              noteText.isEmpty ? '—' : noteText,
+                                              style: TextStyle(
+                                                color: noteText.isEmpty
+                                                    ? Colors.white38
+                                                    : Colors.white70,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.pop(ctx, false),
+                                          child: const Text('Cancel'),
+                                        ),
+                                        FilledButton(
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor:
+                                                const Color(0xFFE53935),
+                                          ),
+                                          onPressed: () =>
+                                              Navigator.pop(ctx, true),
+                                          child: const Text('Delete'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  return dest ?? false;
+                                },
                                 onDismissed: (_) async {
                                   await widget.repository
                                       .deleteTransaction(row['id'] as String);
                                   _reload();
                                 },
-                                child: Card(
-                                  margin: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 7),
-                                  child: ListTile(
-                                    contentPadding: const EdgeInsets.symmetric(
-                                        horizontal: 14, vertical: 6),
-                                    leading: Container(
-                                      height: 42,
-                                      width: 42,
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(13),
-                                        color: amountColor.withOpacity(0.18),
-                                      ),
-                                      child: Icon(
-                                        leadingIcon,
-                                        color: amountColor,
-                                      ),
-                                    ),
-                                    title: Text(
-                                      formatMoney(amount,
-                                          currencyCode: accountCurrency),
-                                      style: TextStyle(
-                                        color: amountColor,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 17,
-                                      ),
-                                    ),
-                                    subtitle: Padding(
-                                      padding: const EdgeInsets.only(top: 3),
-                                      child: Text(
-                                        subtitle,
-                                        style: const TextStyle(
-                                            color: Colors.white70),
-                                      ),
-                                    ),
-                                    trailing: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 10, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(30),
-                                        color: Colors.white.withOpacity(0.08),
-                                      ),
-                                      child: Text(kind.toUpperCase(),
-                                          style: const TextStyle(fontSize: 11)),
-                                    ),
-                                  ),
-                                ),
+                                child: tile,
                               );
                             },
                           ),
@@ -361,10 +586,16 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
 
   List<Map<String, dynamic>> _accounts = [];
   List<Map<String, dynamic>> _categories = [];
+  List<Map<String, dynamic>> _savingsGoals = [];
+  List<Map<String, dynamic>> _loans = [];
   String _kind = 'expense';
   String? _accountId;
   String? _categoryId;
-  String? _transferAccountId;
+  String _transferFromKind = 'account';
+  String _transferToKind = 'account';
+  String? _transferFromEntityId;
+  String? _transferToEntityId;
+  String? _bridgeAccountId;
   String _entryCurrency = 'USD';
   double? _previewConvertedAmount;
   bool _previewLoading = false;
@@ -372,6 +603,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
   int _previewRequestId = 0;
   DateTime _date = DateTime.now();
   bool _loading = false;
+  Map<String, int> _usageScores = {};
 
   List<Map<String, dynamic>> _uniqueById(List<Map<String, dynamic>> source) {
     final seen = <String>{};
@@ -383,12 +615,6 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
       result.add(row);
     }
     return result;
-  }
-
-  String? _safeSelectedValue(String? value, List<Map<String, dynamic>> rows) {
-    if (value == null) return null;
-    final exists = rows.any((row) => row['id']?.toString() == value);
-    return exists ? value : null;
   }
 
   @override
@@ -414,28 +640,418 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
   }
 
   Future<void> _load() async {
-    final accounts = await widget.repository.fetchAccounts();
-    final categories = await widget.repository.fetchCategories(_kind);
-    final defaultCurrency =
-        (await widget.repository.fetchUserCurrencyCode()).toUpperCase();
-    if (!mounted) return;
-    setState(() {
-      _accounts = accounts;
-      _categories = categories;
-      _accountId = accounts.isNotEmpty ? accounts.first['id'].toString() : null;
-      _categoryId =
-          categories.isNotEmpty ? categories.first['id'].toString() : null;
-      _transferAccountId =
-          accounts.length > 1 ? accounts[1]['id'].toString() : null;
-      _entryCurrency = defaultCurrency;
-    });
-    await _refreshConversionPreview();
+    try {
+      final accounts = await widget.repository.fetchAccounts();
+      final categories = await widget.repository.fetchCategories(_kind);
+      final goals = await widget.repository.fetchSavingsGoals();
+      final loans = await widget.repository.fetchLoans();
+      final defaultCurrency =
+          (await widget.repository.fetchUserCurrencyCode()).toUpperCase();
+      final usageScores = await TransactionCreationUsageStore.loadScores();
+      final sortedAccounts =
+          TransactionCreationUsageStore.sortAccounts(accounts, usageScores);
+      final sortedCategories = TransactionCreationUsageStore.sortCategories(
+        categories,
+        usageScores,
+        _kind,
+      );
+      if (!mounted) return;
+      setState(() {
+        _accounts = accounts;
+        _usageScores = usageScores;
+        _categories = categories;
+        _savingsGoals = goals;
+        _loans = loans;
+        _accountId = sortedAccounts.isNotEmpty
+            ? sortedAccounts.first['id']?.toString()
+            : null;
+        _categoryId = sortedCategories.isNotEmpty
+            ? sortedCategories.first['id']?.toString()
+            : null;
+        _entryCurrency = defaultCurrency;
+        _ensureTransferEntityDefaults();
+      });
+      await _refreshConversionPreview();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(error))),
+      );
+      Navigator.of(context).pop(false);
+    }
+  }
+
+  String _accountDisplayLabel(
+    String? id,
+    List<Map<String, dynamic>> sorted,
+  ) {
+    if (id == null) return 'Select account';
+    for (final e in sorted) {
+      if (e['id']?.toString() == id) {
+        return '${(e['name'] ?? '').toString()} (${(e['currency_code'] ?? 'USD').toString().toUpperCase()})';
+      }
+    }
+    return 'Select account';
+  }
+
+  String _categoryDisplayLabel(String? id, List<Map<String, dynamic>> sorted) {
+    if (id == null) return 'Select category';
+    for (final e in sorted) {
+      if (e['id']?.toString() == id) {
+        return (e['name'] ?? '').toString();
+      }
+    }
+    return 'Select category';
+  }
+
+  Widget _searchableAccountField({
+    required String label,
+    required String? selectedId,
+    required List<Map<String, dynamic>> candidates,
+    required void Function(String id) onSelected,
+    String? helperText,
+  }) {
+    final sorted = TransactionCreationUsageStore.sortAccounts(
+      _uniqueById(candidates),
+      _usageScores,
+    );
+    final hintColor = Theme.of(context).hintColor;
+    final iconColor =
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: label,
+        helperText: helperText,
+      ),
+      child: InkWell(
+        onTap: sorted.isEmpty
+            ? null
+            : () async {
+                final id = await showSearchableIdPickerSheet(
+                  context,
+                  title: label,
+                  searchHint: 'Search name or currency',
+                  items: sorted,
+                  selectedId: selectedId,
+                  itemTitle: (e) =>
+                      '${(e['name'] ?? '').toString()} (${(e['currency_code'] ?? 'USD').toString().toUpperCase()})',
+                  matches: (row, q) {
+                    final name = (row['name'] ?? '').toString().toLowerCase();
+                    final cur =
+                        (row['currency_code'] ?? '').toString().toLowerCase();
+                    return name.contains(q) || cur.contains(q);
+                  },
+                );
+                if (id != null) onSelected(id);
+              },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _accountDisplayLabel(selectedId, sorted),
+                  style: sorted.isEmpty ? TextStyle(color: hintColor) : null,
+                ),
+              ),
+              Icon(Icons.manage_search, size: 22, color: iconColor),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _searchableCategoryField() {
+    final sorted = TransactionCreationUsageStore.sortCategories(
+      _uniqueById(_categories),
+      _usageScores,
+      _kind,
+    );
+    final hintColor = Theme.of(context).hintColor;
+    final iconColor =
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
+    return InputDecorator(
+      decoration: const InputDecoration(labelText: 'Category'),
+      child: InkWell(
+        onTap: sorted.isEmpty
+            ? null
+            : () async {
+                final id = await showSearchableIdPickerSheet(
+                  context,
+                  title: 'Category',
+                  searchHint: 'Search category',
+                  items: sorted,
+                  selectedId: _categoryId,
+                  itemTitle: (e) => (e['name'] ?? '').toString(),
+                  leadingForRow: (e) => Icon(
+                    categoryIconFor(
+                      name: e['name']?.toString(),
+                      type: _kind,
+                    ),
+                    size: 20,
+                  ),
+                  matches: (row, q) {
+                    final name = (row['name'] ?? '').toString().toLowerCase();
+                    return name.contains(q);
+                  },
+                );
+                if (id != null) setState(() => _categoryId = id);
+              },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
+          child: Row(
+            children: [
+              Icon(
+                categoryIconFor(
+                  name: _categoryNameForId(_categoryId),
+                  type: _kind,
+                ),
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _categoryDisplayLabel(_categoryId, sorted),
+                  style: sorted.isEmpty ? TextStyle(color: hintColor) : null,
+                ),
+              ),
+              Icon(Icons.manage_search, size: 22, color: iconColor),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String? _categoryNameForId(String? id) {
+    if (id == null) return null;
+    for (final e in _categories) {
+      if (e['id']?.toString() == id) {
+        return e['name']?.toString();
+      }
+    }
+    return null;
+  }
+
+  Widget _searchableCurrencyField() {
+    final codes =
+        TransactionCreationUsageStore.sortedCurrencyCodes(_usageScores);
+    final display = supportedCurrencyCodes.contains(_entryCurrency)
+        ? _entryCurrency
+        : 'USD';
+    final iconColor =
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
+    return InputDecorator(
+      decoration: const InputDecoration(
+        labelText: 'Entered amount currency',
+      ),
+      child: InkWell(
+        onTap: () async {
+          final code = await showSearchableStringPickerSheet(
+            context,
+            title: 'Amount currency',
+            searchHint: 'Search code (e.g. EUR)',
+            values: codes,
+            selected: display,
+            matches: (v, q) => v.toLowerCase().contains(q),
+          );
+          if (code != null) {
+            setState(() => _entryCurrency = code);
+            _refreshConversionPreview();
+          }
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
+          child: Row(
+            children: [
+              Expanded(child: Text(display)),
+              Icon(Icons.manage_search, size: 22, color: iconColor),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _recordCreationUsageAfterSave() async {
+    final accountIds = <String>[];
+    if (_kind == 'transfer') {
+      if (_transferFromKind == 'account' && _transferFromEntityId != null) {
+        accountIds.add(_transferFromEntityId!);
+      }
+      if (_transferToKind == 'account' && _transferToEntityId != null) {
+        accountIds.add(_transferToEntityId!);
+      }
+      if (_transferNeedsBridge() && _bridgeAccountId != null) {
+        accountIds.add(_bridgeAccountId!);
+      }
+    } else if (_accountId != null) {
+      accountIds.add(_accountId!);
+    }
+    await TransactionCreationUsageStore.record(
+      accountIds: accountIds,
+      categoryId: _kind == 'transfer' ? null : _categoryId,
+      categoryKind: _kind == 'transfer' ? null : _kind,
+      entryCurrency: _entryCurrency,
+    );
+  }
+
+  Map<String, dynamic>? _goalById(String? id) {
+    if (id == null) return null;
+    for (final g in _savingsGoals) {
+      if (g['id']?.toString() == id) return g;
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? _loanById(String? id) {
+    if (id == null) return null;
+    for (final l in _loans) {
+      if (l['id']?.toString() == id) return l;
+    }
+    return null;
+  }
+
+  List<Map<String, dynamic>> _loansOwedToMe() {
+    return _loans
+        .where((l) => (l['direction'] ?? '').toString() == 'owed_to_me')
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _loansOwedByMe() {
+    return _loans
+        .where((l) => (l['direction'] ?? '').toString() == 'owed_by_me')
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _toSavingsGoalOptions() {
+    final all = _uniqueById(_savingsGoals);
+    if (_transferFromKind == 'savings_goal' &&
+        _transferToKind == 'savings_goal' &&
+        _transferFromEntityId != null) {
+      return all
+          .where((g) => g['id']?.toString() != _transferFromEntityId)
+          .toList();
+    }
+    return all;
+  }
+
+  bool _transferNeedsBridge() {
+    if (_kind != 'transfer') return false;
+    return (_transferFromKind == 'savings_goal' &&
+            _transferToKind == 'savings_goal') ||
+        (_transferFromKind == 'savings_goal' && _transferToKind == 'loan') ||
+        (_transferFromKind == 'loan' && _transferToKind == 'savings_goal');
+  }
+
+  String? _requiredBridgeCurrency() {
+    if (!_transferNeedsBridge()) return null;
+    if (_transferFromKind == 'savings_goal') {
+      final g = _goalById(_transferFromEntityId);
+      return (g?['currency_code'] ?? '').toString().toUpperCase();
+    }
+    if (_transferFromKind == 'loan') {
+      final l = _loanById(_transferFromEntityId);
+      return (l?['currency_code'] ?? '').toString().toUpperCase();
+    }
+    return null;
+  }
+
+  List<Map<String, dynamic>> _bridgeAccountCandidates() {
+    final cur = _requiredBridgeCurrency();
+    if (cur == null || cur.isEmpty) return [];
+    final filtered = _uniqueById(_accounts)
+        .where(
+            (a) => (a['currency_code'] ?? '').toString().toUpperCase() == cur)
+        .toList();
+    return TransactionCreationUsageStore.sortAccounts(
+      filtered,
+      _usageScores,
+    );
+  }
+
+  void _ensureTransferEntityDefaults() {
+    final ua = TransactionCreationUsageStore.sortAccounts(
+      _uniqueById(_accounts),
+      _usageScores,
+    );
+    if (ua.isEmpty) {
+      _transferFromEntityId = null;
+      _transferToEntityId = null;
+      _bridgeAccountId = null;
+      return;
+    }
+    _transferFromEntityId ??= ua.first['id']?.toString();
+    if (ua.length > 1) {
+      final first = ua.first['id']?.toString();
+      final second = ua[1]['id']?.toString();
+      _transferToEntityId = _transferToEntityId == null
+          ? (first != second ? second : first)
+          : _transferToEntityId;
+    } else {
+      _transferToEntityId ??= ua.first['id']?.toString();
+    }
+    final bridgeOpts = _bridgeAccountCandidates();
+    if (bridgeOpts.isEmpty) {
+      _bridgeAccountId = null;
+    } else if (_bridgeAccountId == null ||
+        !bridgeOpts.any((a) => a['id']?.toString() == _bridgeAccountId)) {
+      _bridgeAccountId = bridgeOpts.first['id']?.toString();
+    }
+  }
+
+  String? _effectiveTransferLegCurrency() {
+    if (_transferFromKind == 'account') {
+      return _accountCurrencyById(_transferFromEntityId);
+    }
+    if (_transferFromKind == 'savings_goal') {
+      final g = _goalById(_transferFromEntityId);
+      if (g == null) return null;
+      return (g['currency_code'] ?? 'USD').toString().toUpperCase();
+    }
+    if (_transferFromKind == 'loan') {
+      final l = _loanById(_transferFromEntityId);
+      if (l == null) return null;
+      return (l['currency_code'] ?? 'USD').toString().toUpperCase();
+    }
+    return null;
+  }
+
+  String? _defaultEntityIdForKind(String kind, {required bool isFrom}) {
+    if (kind == 'account') {
+      final ua = TransactionCreationUsageStore.sortAccounts(
+        _uniqueById(_accounts),
+        _usageScores,
+      );
+      if (ua.isEmpty) return null;
+      return ua.first['id']?.toString();
+    }
+    if (kind == 'savings_goal') {
+      final opts =
+          isFrom ? _uniqueById(_savingsGoals) : _toSavingsGoalOptions();
+      if (opts.isEmpty) return null;
+      return opts.first['id']?.toString();
+    }
+    if (kind == 'loan') {
+      final list = isFrom ? _loansOwedToMe() : _loansOwedByMe();
+      if (list.isEmpty) return null;
+      return list.first['id']?.toString();
+    }
+    return null;
+  }
+
+  void _pickBridgeDefault() {
+    final opts = _bridgeAccountCandidates();
+    _bridgeAccountId = opts.isEmpty ? null : opts.first['id']?.toString();
   }
 
   Future<void> _refreshConversionPreview() async {
     final requestId = ++_previewRequestId;
     final enteredAmount = _parseAmountInput(_amountController.text);
-    final targetCurrency = _accountCurrencyById(_accountId) ?? _entryCurrency;
+    final targetCurrency = _kind == 'transfer'
+        ? (_effectiveTransferLegCurrency() ?? _entryCurrency)
+        : (_accountCurrencyById(_accountId) ?? _entryCurrency);
     if (enteredAmount == null || enteredAmount <= 0) {
       if (!mounted || requestId != _previewRequestId) return;
       setState(() {
@@ -493,7 +1109,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_accountId == null) {
+    if (_kind != 'transfer' && _accountId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please create an account first.')),
       );
@@ -505,12 +1121,48 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
       );
       return;
     }
-    if (_kind == 'transfer' && _transferAccountId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Please select transfer destination account.')),
-      );
-      return;
+    if (_kind == 'transfer') {
+      final uniqueAccounts = _uniqueById(_accounts);
+      if (uniqueAccounts.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please create an account first.')),
+        );
+        return;
+      }
+      if (_transferFromEntityId == null || _transferToEntityId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Select both ends of the transfer.')),
+        );
+        return;
+      }
+      if (_transferFromKind == _transferToKind &&
+          _transferFromEntityId == _transferToEntityId) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Source and destination must be different.')),
+        );
+        return;
+      }
+      if (_transferNeedsBridge()) {
+        final opts = _bridgeAccountCandidates();
+        if (opts.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Add an account in ${_requiredBridgeCurrency() ?? ''} to complete this transfer.',
+              ),
+            ),
+          );
+          return;
+        }
+        if (_bridgeAccountId == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('Select the account funds pass through.')),
+          );
+          return;
+        }
+      }
     }
     setState(() => _loading = true);
     try {
@@ -518,6 +1170,60 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
       if (enteredAmount == null || enteredAmount <= 0) {
         throw Exception('Enter valid amount');
       }
+      final note = _noteController.text.trim().isEmpty
+          ? null
+          : _noteController.text.trim();
+
+      if (_kind == 'transfer') {
+        final targetCurrency =
+            _effectiveTransferLegCurrency() ?? _entryCurrency;
+        var convertedAmount = enteredAmount;
+        if (_entryCurrency != targetCurrency) {
+          final rate = await widget.repository.fetchExchangeRate(
+            fromCurrency: _entryCurrency,
+            toCurrency: targetCurrency,
+          );
+          convertedAmount = enteredAmount * rate;
+        }
+        convertedAmount = (convertedAmount * 100).round() / 100;
+
+        final fk = _transferFromKind;
+        final tk = _transferToKind;
+        final fid = _transferFromEntityId!;
+        final tid = _transferToEntityId!;
+
+        double? transferCreditAmount;
+        if (fk == 'account' && tk == 'account') {
+          final sourceCur =
+              (_accountCurrencyById(fid) ?? _entryCurrency).toUpperCase();
+          final destCur =
+              (_accountCurrencyById(tid) ?? sourceCur).toUpperCase();
+          if (sourceCur != destCur) {
+            final legRate = await widget.repository.fetchExchangeRate(
+              fromCurrency: sourceCur,
+              toCurrency: destCur,
+            );
+            transferCreditAmount =
+                ((convertedAmount * legRate * 100).round() / 100);
+          }
+        }
+
+        await widget.repository.executeEntityTransfer(
+          fromKind: fk,
+          fromId: fid,
+          toKind: tk,
+          toId: tid,
+          amount: convertedAmount,
+          bridgeAccountId: _transferNeedsBridge() ? _bridgeAccountId : null,
+          transferCreditAmount: transferCreditAmount,
+          transactionDate: _date,
+          note: note,
+        );
+        await _recordCreationUsageAfterSave();
+        if (mounted) Navigator.pop(context, true);
+        return;
+      }
+
       final targetCurrency = _accountCurrencyById(_accountId) ?? _entryCurrency;
       var convertedAmount = enteredAmount;
       if (_entryCurrency != targetCurrency) {
@@ -527,17 +1233,19 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
         );
         convertedAmount = enteredAmount * rate;
       }
+      convertedAmount = (convertedAmount * 100).round() / 100;
+
       await widget.repository.createTransaction(
         accountId: _accountId!,
-        categoryId: _kind == 'transfer' ? null : _categoryId,
+        categoryId: _categoryId,
         kind: _kind,
         amount: convertedAmount,
         transactionDate: _date,
-        note: _noteController.text.trim().isEmpty
-            ? null
-            : _noteController.text.trim(),
-        transferAccountId: _kind == 'transfer' ? _transferAccountId : null,
+        note: note,
+        transferAccountId: null,
+        transferCreditAmount: null,
       );
+      await _recordCreationUsageAfterSave();
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
@@ -549,13 +1257,80 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
     }
   }
 
+  Widget _buildTransferEndpointPicker({
+    required String kind,
+    required String? selectedId,
+    required List<Map<String, dynamic>> savingsOptions,
+    required List<Map<String, dynamic>> loanOptions,
+    required List<Map<String, dynamic>> uniqueAccounts,
+    required String label,
+    required String emptyMessage,
+    required void Function(String?) onChanged,
+  }) {
+    if (kind == 'account') {
+      return _searchableAccountField(
+        label: label,
+        selectedId: selectedId,
+        candidates: uniqueAccounts,
+        onSelected: (id) => onChanged(id),
+      );
+    }
+    if (kind == 'savings_goal') {
+      if (savingsOptions.isEmpty) {
+        return Text(
+          emptyMessage,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        );
+      }
+      final safe = savingsOptions.any((e) => e['id']?.toString() == selectedId)
+          ? selectedId
+          : savingsOptions.first['id']?.toString();
+      return DropdownButtonFormField<String>(
+        value: safe,
+        isExpanded: true,
+        items: savingsOptions
+            .map((e) => DropdownMenuItem<String>(
+                  value: e['id'].toString(),
+                  child: Text(
+                    '${(e['name'] ?? '').toString()} (${(e['currency_code'] ?? '').toString().toUpperCase()})',
+                  ),
+                ))
+            .toList(),
+        onChanged: onChanged,
+        decoration: InputDecoration(labelText: '$label (goal)'),
+      );
+    }
+    if (kind == 'loan') {
+      if (loanOptions.isEmpty) {
+        return Text(
+          emptyMessage,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        );
+      }
+      final safe = loanOptions.any((e) => e['id']?.toString() == selectedId)
+          ? selectedId
+          : loanOptions.first['id']?.toString();
+      return DropdownButtonFormField<String>(
+        value: safe,
+        isExpanded: true,
+        items: loanOptions
+            .map((e) => DropdownMenuItem<String>(
+                  value: e['id'].toString(),
+                  child: Text(
+                    '${(e['person_name'] ?? '').toString()} • ${(e['currency_code'] ?? '').toString().toUpperCase()}',
+                  ),
+                ))
+            .toList(),
+        onChanged: onChanged,
+        decoration: InputDecoration(labelText: '$label (loan)'),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
   @override
   Widget build(BuildContext context) {
     final uniqueAccounts = _uniqueById(_accounts);
-    final uniqueCategories = _uniqueById(_categories);
-    final transferAccounts = _uniqueById(
-      uniqueAccounts.where((e) => e['id']?.toString() != _accountId).toList(),
-    );
 
     return AlertDialog(
       title: const Text('Create Transaction'),
@@ -578,79 +1353,169 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                   ],
                   onChanged: (value) async {
                     if (value == null) return;
-                    final categories = value == 'transfer'
-                        ? <Map<String, dynamic>>[]
-                        : await widget.repository.fetchCategories(value);
+                    List<Map<String, dynamic>> categories;
+                    try {
+                      categories = value == 'transfer'
+                          ? <Map<String, dynamic>>[]
+                          : await widget.repository.fetchCategories(value);
+                    } catch (error) {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(friendlyErrorMessage(error))),
+                      );
+                      return;
+                    }
                     if (!mounted) return;
                     setState(() {
                       _kind = value;
                       _categories = categories;
-                      _categoryId = categories.isNotEmpty
-                          ? categories.first['id'].toString()
+                      final sorted =
+                          TransactionCreationUsageStore.sortCategories(
+                        categories,
+                        _usageScores,
+                        value,
+                      );
+                      _categoryId = sorted.isNotEmpty
+                          ? sorted.first['id']?.toString()
                           : null;
+                      if (value == 'transfer') {
+                        _transferFromKind = 'account';
+                        _transferToKind = 'account';
+                        _transferFromEntityId = null;
+                        _transferToEntityId = null;
+                        _bridgeAccountId = null;
+                        _ensureTransferEntityDefaults();
+                      }
                     });
                   },
                 ),
                 const SizedBox(height: 10),
-                DropdownButtonFormField<String>(
-                  value: _safeSelectedValue(_accountId, uniqueAccounts),
-                  isExpanded: true,
-                  items: uniqueAccounts
-                      .map((e) => DropdownMenuItem<String>(
-                            value: e['id'].toString(),
-                            child: Text(
-                              '${(e['name'] ?? '').toString()} (${(e['currency_code'] ?? 'USD').toString().toUpperCase()})',
-                            ),
-                          ))
-                      .toList(),
-                  onChanged: (value) async {
-                    setState(() => _accountId = value);
-                    await _refreshConversionPreview();
-                  },
-                  decoration: const InputDecoration(labelText: 'Account'),
-                ),
-                const SizedBox(height: 10),
-                if (_kind != 'transfer')
-                  DropdownButtonFormField<String>(
-                    value: _safeSelectedValue(_categoryId, uniqueCategories),
-                    isExpanded: true,
-                    items: uniqueCategories
-                        .map((e) => DropdownMenuItem<String>(
-                              value: e['id'].toString(),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    categoryIconFor(
-                                      name: e['name']?.toString(),
-                                      type: _kind,
-                                    ),
-                                    size: 18,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text((e['name'] ?? '').toString()),
-                                ],
-                              ),
-                            ))
-                        .toList(),
-                    onChanged: (value) => setState(() => _categoryId = value),
-                    decoration: const InputDecoration(labelText: 'Category'),
+                if (_kind == 'transfer') ...[
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'From',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
                   ),
-                if (_kind == 'transfer')
-                  DropdownButtonFormField<String>(
-                    value: _safeSelectedValue(
-                        _transferAccountId, transferAccounts),
-                    isExpanded: true,
-                    items: transferAccounts
-                        .map((e) => DropdownMenuItem<String>(
-                              value: e['id'].toString(),
-                              child:
-                                  Text('To: ${(e['name'] ?? '').toString()}'),
-                            ))
-                        .toList(),
-                    onChanged: (value) =>
-                        setState(() => _transferAccountId = value),
-                    decoration: const InputDecoration(labelText: 'Transfer To'),
+                  const SizedBox(height: 6),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'account', label: Text('Account')),
+                      ButtonSegment(
+                          value: 'savings_goal', label: Text('Savings')),
+                      ButtonSegment(value: 'loan', label: Text('Loan')),
+                    ],
+                    selected: {_transferFromKind},
+                    onSelectionChanged: (s) {
+                      setState(() {
+                        _transferFromKind = s.first;
+                        _transferFromEntityId =
+                            _defaultEntityIdForKind(s.first, isFrom: true);
+                        _pickBridgeDefault();
+                      });
+                      _refreshConversionPreview();
+                    },
                   ),
+                  const SizedBox(height: 8),
+                  _buildTransferEndpointPicker(
+                    kind: _transferFromKind,
+                    selectedId: _transferFromEntityId,
+                    savingsOptions: _uniqueById(_savingsGoals),
+                    loanOptions: _loansOwedToMe(),
+                    uniqueAccounts: uniqueAccounts,
+                    label: 'Source',
+                    emptyMessage:
+                        'Create a savings goal on the Savings tab, or add a “they owe you” loan.',
+                    onChanged: (id) {
+                      setState(() {
+                        _transferFromEntityId = id;
+                        if (_transferFromKind == 'savings_goal' &&
+                            _transferToKind == 'savings_goal') {
+                          final opts = _toSavingsGoalOptions();
+                          if (opts.isNotEmpty &&
+                              opts.every((e) =>
+                                  e['id']?.toString() != _transferToEntityId)) {
+                            _transferToEntityId = opts.first['id']?.toString();
+                          }
+                        }
+                        _pickBridgeDefault();
+                      });
+                      _refreshConversionPreview();
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'To',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'account', label: Text('Account')),
+                      ButtonSegment(
+                          value: 'savings_goal', label: Text('Savings')),
+                      ButtonSegment(value: 'loan', label: Text('Loan')),
+                    ],
+                    selected: {_transferToKind},
+                    onSelectionChanged: (s) {
+                      setState(() {
+                        _transferToKind = s.first;
+                        _transferToEntityId =
+                            _defaultEntityIdForKind(s.first, isFrom: false);
+                        _pickBridgeDefault();
+                      });
+                      _refreshConversionPreview();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  _buildTransferEndpointPicker(
+                    kind: _transferToKind,
+                    selectedId: _transferToEntityId,
+                    savingsOptions: _toSavingsGoalOptions(),
+                    loanOptions: _loansOwedByMe(),
+                    uniqueAccounts: uniqueAccounts,
+                    label: 'Destination',
+                    emptyMessage:
+                        'Create another goal, or add an “I owe them” loan to pay from here.',
+                    onChanged: (id) {
+                      setState(() {
+                        _transferToEntityId = id;
+                        _pickBridgeDefault();
+                      });
+                      _refreshConversionPreview();
+                    },
+                  ),
+                  if (_transferNeedsBridge()) ...[
+                    const SizedBox(height: 10),
+                    _searchableAccountField(
+                      label: 'Through account (same currency)',
+                      selectedId: _bridgeAccountId,
+                      candidates: _bridgeAccountCandidates(),
+                      helperText:
+                          'Funds move through this wallet for this transfer',
+                      onSelected: (id) => setState(() => _bridgeAccountId = id),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                ] else ...[
+                  _searchableAccountField(
+                    label: 'Account',
+                    selectedId: _accountId,
+                    candidates: uniqueAccounts,
+                    onSelected: (id) async {
+                      setState(() => _accountId = id);
+                      await _refreshConversionPreview();
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                if (_kind != 'transfer') ...[
+                  _searchableCategoryField(),
+                ],
                 const SizedBox(height: 10),
                 TextFormField(
                   controller: _amountController,
@@ -667,28 +1532,12 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                   },
                 ),
                 const SizedBox(height: 10),
-                DropdownButtonFormField<String>(
-                  value: supportedCurrencyCodes.contains(_entryCurrency)
-                      ? _entryCurrency
-                      : 'USD',
-                  isExpanded: true,
-                  items: supportedCurrencyCodes
-                      .map((code) => DropdownMenuItem<String>(
-                          value: code, child: Text(code)))
-                      .toList(),
-                  onChanged: (value) {
-                    if (value == null) return;
-                    setState(() => _entryCurrency = value);
-                    _refreshConversionPreview();
-                  },
-                  decoration: const InputDecoration(
-                      labelText: 'Entered amount currency'),
-                ),
+                _searchableCurrencyField(),
                 const SizedBox(height: 6),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    'Saved in ${_accountCurrencyById(_accountId) ?? _entryCurrency}',
+                    'Saved in ${_kind == 'transfer' ? (_effectiveTransferLegCurrency() ?? _entryCurrency) : (_accountCurrencyById(_accountId) ?? _entryCurrency)}',
                     style: Theme.of(context)
                         .textTheme
                         .bodySmall
@@ -717,7 +1566,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                     alignment: Alignment.centerLeft,
                     child: Text(
                       '${formatMoney(_parseAmountInput(_amountController.text) ?? 0, currencyCode: _entryCurrency)} ~= '
-                      '${formatMoney(_previewConvertedAmount!, currencyCode: _accountCurrencyById(_accountId) ?? _entryCurrency)}',
+                      '${formatMoney(_previewConvertedAmount!, currencyCode: _kind == 'transfer' ? (_effectiveTransferLegCurrency() ?? _entryCurrency) : (_accountCurrencyById(_accountId) ?? _entryCurrency))}',
                       style: const TextStyle(color: Colors.white70),
                     ),
                   ),
@@ -730,7 +1579,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                 const SizedBox(height: 10),
                 Row(
                   children: [
-                    const Text('Date:'),
+                    const Text('Date & time:'),
                     const SizedBox(width: 8),
                     TextButton(
                       onPressed: () async {
@@ -740,9 +1589,24 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                           lastDate: DateTime(2100),
                           initialDate: _date,
                         );
-                        if (selected != null) setState(() => _date = selected);
+                        if (selected == null || !context.mounted) return;
+                        final time = await showTimePicker(
+                          context: context,
+                          initialTime: TimeOfDay.fromDateTime(_date),
+                        );
+                        if (!context.mounted) return;
+                        final t = time ?? TimeOfDay.fromDateTime(_date);
+                        setState(() {
+                          _date = DateTime(
+                            selected.year,
+                            selected.month,
+                            selected.day,
+                            t.hour,
+                            t.minute,
+                          );
+                        });
                       },
-                      child: Text(DateFormat('yyyy-MM-dd').format(_date)),
+                      child: Text(DateFormat('yyyy-MM-dd HH:mm').format(_date)),
                     ),
                   ],
                 ),
@@ -755,6 +1619,284 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
         TextButton(
             onPressed: _loading ? null : () => Navigator.pop(context),
             child: const Text('Cancel')),
+        FilledButton(
+          onPressed: _loading ? null : _save,
+          child: Text(_loading ? 'Saving...' : 'Save'),
+        ),
+      ],
+    );
+  }
+}
+
+String _editDialogAmountInitialText(double v) {
+  if (v == v.roundToDouble()) {
+    return NumberFormat('#,##0', 'en_US').format(v.toInt());
+  }
+  return NumberFormat('#,##0.00', 'en_US').format(v);
+}
+
+class _EditTransactionDialog extends StatefulWidget {
+  const _EditTransactionDialog({
+    required this.repository,
+    required this.initial,
+  });
+
+  final AppRepository repository;
+  final Map<String, dynamic> initial;
+
+  @override
+  State<_EditTransactionDialog> createState() => _EditTransactionDialogState();
+}
+
+class _EditTransactionDialogState extends State<_EditTransactionDialog> {
+  final _amountController = TextEditingController();
+  final _noteController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  late final String _kind;
+  late final String _transactionId;
+  List<Map<String, dynamic>> _categories = [];
+  String? _categoryId;
+  bool _loading = false;
+
+  String _relationNameLocal(dynamic relation) {
+    if (relation is Map) {
+      return (relation['name'] ?? '').toString();
+    }
+    if (relation is List && relation.isNotEmpty && relation.first is Map) {
+      return (relation.first as Map)['name']?.toString() ?? '';
+    }
+    return '';
+  }
+
+  String _sourceAccountCurrency() {
+    final acc = widget.initial['account'];
+    if (acc is Map) {
+      return (acc['currency_code'] ?? 'USD').toString().toUpperCase();
+    }
+    if (acc is List && acc.isNotEmpty && acc.first is Map) {
+      return ((acc.first as Map)['currency_code'] ?? 'USD')
+          .toString()
+          .toUpperCase();
+    }
+    return 'USD';
+  }
+
+  String _destAccountCurrency() {
+    final acc = widget.initial['transfer_account'];
+    if (acc is Map) {
+      return (acc['currency_code'] ?? 'USD').toString().toUpperCase();
+    }
+    if (acc is List && acc.isNotEmpty && acc.first is Map) {
+      return ((acc.first as Map)['currency_code'] ?? 'USD')
+          .toString()
+          .toUpperCase();
+    }
+    return 'USD';
+  }
+
+  List<Map<String, dynamic>> _uniqueById(List<Map<String, dynamic>> source) {
+    final seen = <String>{};
+    final result = <Map<String, dynamic>>[];
+    for (final row in source) {
+      final id = row['id']?.toString();
+      if (id == null || id.isEmpty || seen.contains(id)) continue;
+      seen.add(id);
+      result.add(row);
+    }
+    return result;
+  }
+
+  String? _safeSelectedCategory(
+    String? value,
+    List<Map<String, dynamic>> rows,
+  ) {
+    if (value == null) return null;
+    final exists = rows.any((row) => row['id']?.toString() == value);
+    return exists ? value : null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _kind = (widget.initial['kind'] ?? 'expense').toString();
+    _transactionId = widget.initial['id']?.toString() ?? '';
+    final amt = ((widget.initial['amount'] as num?) ?? 0).toDouble();
+    _amountController.text = _editDialogAmountInitialText(amt);
+    _noteController.text = (widget.initial['note'] ?? '').toString();
+    _categoryId = widget.initial['category_id']?.toString();
+    _loadCategories();
+  }
+
+  Future<void> _loadCategories() async {
+    if (_kind == 'transfer') return;
+    try {
+      final list = await widget.repository.fetchCategories(_kind);
+      if (!mounted) return;
+      setState(() {
+        _categories = list;
+        if (_safeSelectedCategory(_categoryId, list) == null &&
+            list.isNotEmpty) {
+          _categoryId = list.first['id']?.toString();
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(error))),
+      );
+      Navigator.of(context).pop(false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_kind != 'transfer' && _categoryId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please choose a category.')),
+      );
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      final parsed = parseFormattedAmount(_amountController.text);
+      if (parsed == null || parsed <= 0) {
+        throw Exception('Enter valid amount');
+      }
+      final amount = (parsed * 100).round() / 100;
+
+      double? transferCreditAmount;
+      if (_kind == 'transfer') {
+        final sourceCur = _sourceAccountCurrency();
+        final destCur = _destAccountCurrency();
+        if (sourceCur != destCur) {
+          final legRate = await widget.repository.fetchExchangeRate(
+            fromCurrency: sourceCur,
+            toCurrency: destCur,
+          );
+          transferCreditAmount = ((amount * legRate * 100).round() / 100);
+        }
+      }
+
+      await widget.repository.updateTransaction(
+        transactionId: _transactionId,
+        amount: amount,
+        categoryId: _kind == 'transfer' ? null : _categoryId,
+        note: _noteController.text.trim().isEmpty
+            ? null
+            : _noteController.text.trim(),
+        transferCreditAmount: transferCreditAmount,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(e))),
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final uniqueCategories = _uniqueById(_categories);
+    final transferTo = _relationNameLocal(widget.initial['transfer_account']);
+    final srcCur = _sourceAccountCurrency();
+
+    return AlertDialog(
+      title: const Text('Edit transaction'),
+      content: SizedBox(
+        width: 420,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Type: ${_kind.toUpperCase()}',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                if (_kind == 'transfer') ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'To: $transferTo (${_destAccountCurrency()})',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  Text(
+                    'Amount is in $srcCur (source account).',
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _amountController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [AmountInputFormatter()],
+                  decoration: InputDecoration(
+                    labelText: 'Amount ($srcCur)',
+                  ),
+                  validator: (value) {
+                    final p = parseFormattedAmount(value);
+                    if (p == null || p <= 0) {
+                      return 'Enter valid amount';
+                    }
+                    return null;
+                  },
+                ),
+                if (_kind != 'transfer') ...[
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: _safeSelectedCategory(_categoryId, uniqueCategories),
+                    isExpanded: true,
+                    items: uniqueCategories
+                        .map((e) => DropdownMenuItem<String>(
+                              value: e['id'].toString(),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    categoryIconFor(
+                                      name: e['name']?.toString(),
+                                      type: _kind,
+                                    ),
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text((e['name'] ?? '').toString()),
+                                ],
+                              ),
+                            ))
+                        .toList(),
+                    onChanged: (value) => setState(() => _categoryId = value),
+                    decoration: const InputDecoration(labelText: 'Category'),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _noteController,
+                  decoration:
+                      const InputDecoration(labelText: 'Note (optional)'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _loading ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
         FilledButton(
           onPressed: _loading ? null : _save,
           child: Text(_loading ? 'Saving...' : 'Save'),

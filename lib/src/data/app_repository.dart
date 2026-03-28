@@ -2,15 +2,20 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../core/billing/business_access.dart';
+import '../core/billing/business_entitlement_service.dart';
 import '../core/currency/exchange_rate_service.dart';
+import '../core/ledger/transaction_ledger_service.dart';
 
 class AppRepository {
-  AppRepository(this._client);
+  AppRepository(this._client) : _ledger = TransactionLedgerService(_client);
 
   final SupabaseClient _client;
+  final TransactionLedgerService _ledger;
   static const _globalConversionEnabledKey =
       'global_currency_conversion_enabled';
   static const _pendingOpsKeyPrefix = 'offline_pending_ops';
@@ -18,6 +23,8 @@ class AppRepository {
   static const _syncThrottle = Duration(seconds: 8);
 
   static const _opUpdateUserCurrency = 'update_user_currency';
+  static const _opUpdateBusinessMode = 'update_business_mode';
+  static const _opUpdateActiveWorkspace = 'update_active_workspace';
   static const _opCreateAccount = 'create_account';
   static const _opUpdateAccount = 'update_account';
   static const _opDeleteAccount = 'delete_account';
@@ -26,6 +33,7 @@ class AppRepository {
   static const _opDeleteCategory = 'delete_category';
   static const _opCreateTransaction = 'create_transaction';
   static const _opDeleteTransaction = 'delete_transaction';
+  static const _opUpdateTransaction = 'update_transaction';
   static const _opCreateSavingsGoal = 'create_savings_goal';
   static const _opAddSavingsProgress = 'add_savings_progress';
   static const _opUpsertBudget = 'upsert_budget';
@@ -33,6 +41,7 @@ class AppRepository {
   static const _opCreateLoan = 'create_loan';
   static const _opUpdateLoan = 'update_loan';
   static const _opAddLoanPayment = 'add_loan_payment';
+  static const _opExecuteEntityTransfer = 'execute_entity_transfer';
   static const List<String> _defaultExpenseCategories = [
     'Food',
     'Transport',
@@ -100,10 +109,14 @@ class AppRepository {
   final StreamController<int> _dataChangeController =
       StreamController<int>.broadcast();
   int _dataRevision = 0;
+  _WorkspaceScope _lastKnownWorkspace = const _WorkspaceScope.personal();
 
   Stream<int> get dataChanges => _dataChangeController.stream;
 
   User? get currentUser => _client.auth.currentUser;
+
+  /// True for optimistic/offline rows not yet synced (cannot edit on server).
+  bool isOfflinePendingId(String? id) => _isLocalId(id);
 
   Future<AuthResponse> signUp({
     required String email,
@@ -156,22 +169,30 @@ class AppRepository {
   Future<void> recordSupportEvent() async {
     final user = currentUser;
     if (user == null) return;
+    final scope = await _activeWorkspaceScope();
     await _client.rpc(
       'record_support_event',
-      params: {'p_user_id': user.id},
+      params: {
+        'p_user_id': user.id,
+        'p_organization_id': scope.organizationId,
+      },
     );
   }
 
   Future<void> ensureDefaultCategories() async {
     final user = currentUser;
     if (user == null) return;
+    final scope = await _activeWorkspaceScope();
     try {
       await _client.rpc(
         'seed_default_categories',
-        params: {'p_user_id': user.id},
+        params: {
+          'p_user_id': user.id,
+          'p_organization_id': scope.organizationId,
+        },
       );
-      await _removeCachedKey(_cacheKey('categories:income'));
-      await _removeCachedKey(_cacheKey('categories:expense'));
+      await _removeCachedKey(_categoriesKey('income', scope: scope));
+      await _removeCachedKey(_categoriesKey('expense', scope: scope));
       _notifyDataChanged();
     } catch (_) {
       // Non-blocking best effort. User can still use the app normally.
@@ -183,9 +204,13 @@ class AppRepository {
     if (user == null) {
       return {'today': 0, 'total': 0};
     }
+    final scope = await _activeWorkspaceScope();
     final data = await _client.rpc(
       'get_support_stats',
-      params: {'p_user_id': user.id},
+      params: {
+        'p_user_id': user.id,
+        'p_organization_id': scope.organizationId,
+      },
     );
     final rows = List<Map<String, dynamic>>.from(data as List<dynamic>);
     if (rows.isEmpty) {
@@ -206,18 +231,115 @@ class AppRepository {
 
   String _cacheKey(String name) => _scopedKey('$_cacheKeyPrefix:$name');
 
-  String _transactionsMonthCacheKey(DateTime month) {
+  String _workspaceCacheKey(String name, {_WorkspaceScope? scope}) {
+    final resolved = scope ?? _lastKnownWorkspace;
+    return _cacheKey('$name:${resolved.cacheSuffix}');
+  }
+
+  String _accountsKey({_WorkspaceScope? scope}) =>
+      _workspaceCacheKey('accounts', scope: scope);
+
+  String _categoriesKey(String type, {_WorkspaceScope? scope}) =>
+      _workspaceCacheKey('categories:$type', scope: scope);
+
+  String _transactionsKey({_WorkspaceScope? scope}) =>
+      _workspaceCacheKey('transactions', scope: scope);
+
+  String _savingsGoalsKey({_WorkspaceScope? scope}) =>
+      _workspaceCacheKey('savings_goals', scope: scope);
+
+  String _savingsGoalContributionsKey({_WorkspaceScope? scope}) =>
+      _workspaceCacheKey('savings_goal_contributions', scope: scope);
+
+  String _loansKey({_WorkspaceScope? scope}) =>
+      _workspaceCacheKey('loans', scope: scope);
+
+  String _loanPaymentsKey({_WorkspaceScope? scope}) =>
+      _workspaceCacheKey('loan_payments', scope: scope);
+
+  String _dashboardSummaryKey({_WorkspaceScope? scope}) =>
+      _workspaceCacheKey('dashboard_summary', scope: scope);
+
+  String _transactionsMonthCacheKey(
+    DateTime month, {
+    _WorkspaceScope? scope,
+  }) {
     final normalized = DateTime(month.year, month.month, 1);
     final monthKey =
         '${normalized.year}-${normalized.month.toString().padLeft(2, '0')}';
-    return _cacheKey('transactions_month:$monthKey');
+    return _workspaceCacheKey('transactions_month:$monthKey', scope: scope);
   }
 
-  String _budgetsMonthCacheKey(DateTime monthStart) {
+  String _budgetsMonthCacheKey(
+    DateTime monthStart, {
+    _WorkspaceScope? scope,
+  }) {
     final normalized = DateTime(monthStart.year, monthStart.month, 1);
     final monthKey =
         '${normalized.year}-${normalized.month.toString().padLeft(2, '0')}';
-    return _cacheKey('budgets_month:$monthKey');
+    return _workspaceCacheKey('budgets_month:$monthKey', scope: scope);
+  }
+
+  void _rememberWorkspace(_WorkspaceScope scope) {
+    _lastKnownWorkspace = scope;
+  }
+
+  String? _normalizedOrganizationId(dynamic value) {
+    final raw = value?.toString().trim();
+    if (raw == null || raw.isEmpty) return null;
+    return raw;
+  }
+
+  _WorkspaceScope _workspaceScopeFromProfile(Map<String, dynamic>? profile) {
+    final businessModeEnabled =
+        (profile?['business_mode_enabled'] as bool?) ?? false;
+    final activeKind =
+        (profile?['active_workspace_kind'] ?? 'personal').toString().trim();
+    final organizationId =
+        _normalizedOrganizationId(profile?['active_workspace_organization_id']);
+    if (businessModeEnabled &&
+        activeKind == 'organization' &&
+        organizationId != null) {
+      return _WorkspaceScope.organization(organizationId);
+    }
+    return const _WorkspaceScope.personal();
+  }
+
+  void _rememberWorkspaceFromProfile(Map<String, dynamic>? profile) {
+    _rememberWorkspace(_workspaceScopeFromProfile(profile));
+  }
+
+  Future<_WorkspaceScope> _activeWorkspaceScope({
+    Map<String, dynamic>? profile,
+  }) async {
+    if (profile != null) {
+      final scope = _workspaceScopeFromProfile(profile);
+      _rememberWorkspace(scope);
+      return scope;
+    }
+    final resolvedProfile = await fetchProfile();
+    final scope = _workspaceScopeFromProfile(resolvedProfile);
+    _rememberWorkspace(scope);
+    return scope;
+  }
+
+  dynamic _applyWorkspaceFilter(dynamic query, String? organizationId) {
+    final normalized = _normalizedOrganizationId(organizationId);
+    if (normalized == null) {
+      return query.isFilter('organization_id', null);
+    }
+    return query.eq('organization_id', normalized);
+  }
+
+  Future<Map<String, dynamic>> _payloadWithWorkspaceScope(
+    Map<String, dynamic> payload, {
+    _WorkspaceScope? scope,
+  }) async {
+    final resolved = scope ?? await _activeWorkspaceScope();
+    return {
+      ...payload,
+      'organization_id': resolved.organizationId,
+    };
   }
 
   bool _isLocalId(String? id) => id != null && id.startsWith('local-');
@@ -236,6 +358,13 @@ class AppRepository {
         lower.contains('connection') ||
         lower.contains('timed out') ||
         lower.contains('clientexception');
+  }
+
+  bool _isSchemaError(Object error) {
+    final lower = error.toString().toLowerCase();
+    return (lower.contains('column') && lower.contains('does not exist')) ||
+        (lower.contains('relation') && lower.contains('does not exist')) ||
+        lower.contains('schema cache');
   }
 
   Future<List<_PendingOperation>> _loadPendingOperations() async {
@@ -334,6 +463,114 @@ class AppRepository {
     }
   }
 
+  void _mergeAccountBalanceDelta(
+    Map<String, double> deltas,
+    String? accountId,
+    double delta,
+  ) {
+    final id = accountId?.trim();
+    if (id == null || id.isEmpty || delta == 0) return;
+    deltas[id] = (deltas[id] ?? 0) + delta;
+  }
+
+  Map<String, double> _transactionBalanceDeltas({
+    required String kind,
+    required String accountId,
+    required double amount,
+    String? transferAccountId,
+    double? transferCreditAmount,
+  }) {
+    final deltas = <String, double>{};
+    switch (kind) {
+      case 'expense':
+        _mergeAccountBalanceDelta(deltas, accountId, -amount);
+        break;
+      case 'income':
+        _mergeAccountBalanceDelta(deltas, accountId, amount);
+        break;
+      case 'transfer':
+        _mergeAccountBalanceDelta(deltas, accountId, -amount);
+        _mergeAccountBalanceDelta(
+          deltas,
+          transferAccountId,
+          transferCreditAmount ?? amount,
+        );
+        break;
+    }
+    return deltas;
+  }
+
+  Map<String, double> _transactionBalanceDeltasFromRow(
+    Map<String, dynamic> row,
+  ) {
+    final kind = (row['kind'] ?? '').toString();
+    final accountId = (row['account_id'] ?? '').toString();
+    final amount = ((row['amount'] as num?) ?? 0).toDouble();
+    final transferAccountId = row['transfer_account_id']?.toString();
+    final transferCreditAmount =
+        (row['transfer_credit_amount'] as num?)?.toDouble();
+    return _transactionBalanceDeltas(
+      kind: kind,
+      accountId: accountId,
+      amount: amount,
+      transferAccountId: transferAccountId,
+      transferCreditAmount: transferCreditAmount,
+    );
+  }
+
+  Map<String, dynamic>? _findCachedRowById(
+    List<Map<String, dynamic>> rows,
+    String id,
+  ) {
+    for (final row in rows) {
+      if (row['id']?.toString() == id) {
+        return Map<String, dynamic>.from(row);
+      }
+    }
+    return null;
+  }
+
+  Map<String, double> _diffBalanceDeltas(
+    Map<String, double> oldDeltas,
+    Map<String, double> newDeltas,
+  ) {
+    final combined = <String>{...oldDeltas.keys, ...newDeltas.keys};
+    final diff = <String, double>{};
+    for (final key in combined) {
+      final delta = (newDeltas[key] ?? 0) - (oldDeltas[key] ?? 0);
+      if (delta.abs() > 0.000001) {
+        diff[key] = delta;
+      }
+    }
+    return diff;
+  }
+
+  Future<double?> _cachedAccountBalance(String accountId) async {
+    final accounts = await _readCachedList(_accountsKey());
+    final row = _findCachedRowById(accounts, accountId);
+    if (row == null) return null;
+    return ((row['current_balance'] as num?) ?? 0).toDouble();
+  }
+
+  Future<void> _applyAccountBalanceDeltasInCache(
+    Map<String, double> deltas,
+  ) async {
+    if (deltas.isEmpty) return;
+    final accounts = await _readCachedList(_accountsKey());
+    var changed = false;
+    for (final row in accounts) {
+      final id = row['id']?.toString();
+      final delta = id == null ? null : deltas[id];
+      if (delta == null) continue;
+      final current = ((row['current_balance'] as num?) ?? 0).toDouble();
+      row['current_balance'] = current + delta;
+      changed = true;
+    }
+    if (changed) {
+      await _writeCachedList(_accountsKey(), accounts);
+    }
+  }
+
   Future<void> _clearLocalOfflineState() async {
     final prefs = await SharedPreferences.getInstance();
     final userId = currentUser?.id;
@@ -351,18 +588,42 @@ class AppRepository {
   }
 
   Future<void> _clearCoreCaches() async {
-    await Future.wait([
-      _removeCachedKey(_cacheKey('profile')),
-      _removeCachedKey(_cacheKey('dashboard_summary')),
-      _removeCachedKey(_cacheKey('accounts')),
-      _removeCachedKey(_cacheKey('categories:income')),
-      _removeCachedKey(_cacheKey('categories:expense')),
-      _removeCachedKey(_cacheKey('transactions')),
-      _removeCachedKey(_cacheKey('savings_goals')),
-      _removeCachedKey(_cacheKey('savings_goal_contributions')),
-      _removeCachedKey(_cacheKey('loans')),
-      _removeCachedKey(_cacheKey('loan_payments')),
-    ]);
+    final prefs = await SharedPreferences.getInstance();
+    final userId = currentUser?.id;
+    if (userId == null) return;
+    final keys = prefs.getKeys();
+    for (final key in keys) {
+      final isScopedCache =
+          key.startsWith('$_cacheKeyPrefix:') && key.endsWith('_$userId');
+      if (isScopedCache) {
+        await prefs.remove(key);
+      }
+    }
+  }
+
+  Future<void> _clearWorkspaceDataCaches() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userId = currentUser?.id;
+    if (userId == null) return;
+    const prefixes = [
+      '$_cacheKeyPrefix:dashboard_summary:',
+      '$_cacheKeyPrefix:accounts:',
+      '$_cacheKeyPrefix:categories:',
+      '$_cacheKeyPrefix:transactions:',
+      '$_cacheKeyPrefix:transactions_month:',
+      '$_cacheKeyPrefix:budgets_month:',
+      '$_cacheKeyPrefix:savings_goals:',
+      '$_cacheKeyPrefix:savings_goal_contributions:',
+      '$_cacheKeyPrefix:loans:',
+      '$_cacheKeyPrefix:loan_payments:',
+    ];
+    final keys = prefs.getKeys();
+    for (final key in keys) {
+      final isWorkspaceCache = prefixes.any(key.startsWith);
+      if (isWorkspaceCache && key.endsWith('_$userId')) {
+        await prefs.remove(key);
+      }
+    }
   }
 
   void _notifyDataChanged() {
@@ -408,6 +669,22 @@ class AppRepository {
               );
               cacheChanged = true;
               break;
+            case _opUpdateBusinessMode:
+              await _updateBusinessModeRemote(
+                enabled:
+                    (payload['business_mode_enabled'] as bool?) ?? false,
+              );
+              cacheChanged = true;
+              break;
+            case _opUpdateActiveWorkspace:
+              await _updateActiveWorkspaceRemote(
+                kind:
+                    (payload['active_workspace_kind'] ?? 'personal').toString(),
+                organizationId:
+                    payload['active_workspace_organization_id']?.toString(),
+              );
+              cacheChanged = true;
+              break;
             case _opCreateAccount:
               final resolved =
                   await _resolveAccountPayload(payload, accountIdMap);
@@ -417,6 +694,9 @@ class AppRepository {
                 openingBalance:
                     ((resolved['opening_balance'] as num?) ?? 0).toDouble(),
                 currencyCode: (resolved['currency_code'] ?? 'USD').toString(),
+                organizationId: _normalizedOrganizationId(
+                  resolved['organization_id'],
+                ),
               );
               final localId = payload['local_id']?.toString();
               if (_isLocalId(localId)) {
@@ -434,6 +714,9 @@ class AppRepository {
                 currencyCode: (resolved['currency_code'] ?? 'USD').toString(),
                 currentBalance:
                     (resolved['current_balance'] as num?)?.toDouble(),
+                organizationId: _normalizedOrganizationId(
+                  resolved['organization_id'],
+                ),
               );
               cacheChanged = true;
               break;
@@ -441,13 +724,22 @@ class AppRepository {
               final resolved =
                   await _resolveAccountPayload(payload, accountIdMap);
               await _deleteAccountRemote(
-                  accountId: (resolved['account_id'] ?? '').toString());
+                accountId: (resolved['account_id'] ?? '').toString(),
+                organizationId: _normalizedOrganizationId(
+                  resolved['organization_id'],
+                ),
+              );
               cacheChanged = true;
               break;
             case _opCreateCategory:
               final insertedId = await _createCategoryRemote(
                 name: (payload['name'] ?? '').toString(),
                 type: (payload['type'] ?? 'expense').toString(),
+                iconKey: payload['icon']?.toString(),
+                colorHex: payload['color_hex']?.toString(),
+                organizationId: _normalizedOrganizationId(
+                  payload['organization_id'],
+                ),
               );
               final localId = payload['local_id']?.toString();
               if (_isLocalId(localId)) {
@@ -461,6 +753,11 @@ class AppRepository {
               await _updateCategoryRemote(
                 categoryId: (resolved['category_id'] ?? '').toString(),
                 name: (resolved['name'] ?? '').toString(),
+                iconKey: resolved['icon']?.toString(),
+                colorHex: resolved['color_hex']?.toString(),
+                organizationId: _normalizedOrganizationId(
+                  resolved['organization_id'],
+                ),
               );
               cacheChanged = true;
               break;
@@ -468,7 +765,11 @@ class AppRepository {
               final resolved =
                   await _resolveCategoryPayload(payload, categoryIdMap);
               await _deleteCategoryRemote(
-                  categoryId: (resolved['category_id'] ?? '').toString());
+                categoryId: (resolved['category_id'] ?? '').toString(),
+                organizationId: _normalizedOrganizationId(
+                  resolved['organization_id'],
+                ),
+              );
               cacheChanged = true;
               break;
             case _opCreateTransaction:
@@ -481,7 +782,7 @@ class AppRepository {
                 remaining.add(op);
                 continue;
               }
-              await _createTransactionRemote(
+              await _ledger.createTransaction(
                 accountId: (resolved['account_id'] ?? '').toString(),
                 categoryId: resolved['category_id']?.toString(),
                 kind: (resolved['kind'] ?? 'expense').toString(),
@@ -493,6 +794,11 @@ class AppRepository {
                 ),
                 note: resolved['note']?.toString(),
                 transferAccountId: resolved['transfer_account_id']?.toString(),
+                transferCreditAmount:
+                    (resolved['transfer_credit_amount'] as num?)?.toDouble(),
+                organizationId: _normalizedOrganizationId(
+                  resolved['organization_id'],
+                ),
               );
               cacheChanged = true;
               break;
@@ -502,7 +808,37 @@ class AppRepository {
                 cacheChanged = true;
                 break;
               }
-              await _deleteTransactionRemote((transactionId ?? '').toString());
+              await _ledger.deleteTransaction(
+                (transactionId ?? '').toString(),
+                organizationId: _normalizedOrganizationId(
+                  payload['organization_id'],
+                ),
+              );
+              cacheChanged = true;
+              break;
+            case _opUpdateTransaction:
+              final uResolved =
+                  await _resolveCategoryPayload(payload, categoryIdMap);
+              if (_containsUnresolvedLocalRef(uResolved)) {
+                remaining.add(op);
+                continue;
+              }
+              final uTxId = (uResolved['transaction_id'] ?? '').toString();
+              if (_isLocalId(uTxId)) {
+                remaining.add(op);
+                continue;
+              }
+              await _ledger.updateTransaction(
+                transactionId: uTxId,
+                amount: ((uResolved['amount'] as num?) ?? 0).toDouble(),
+                categoryId: uResolved['category_id']?.toString(),
+                note: uResolved['note']?.toString(),
+                transferCreditAmount:
+                    (uResolved['transfer_credit_amount'] as num?)?.toDouble(),
+                organizationId: _normalizedOrganizationId(
+                  uResolved['organization_id'],
+                ),
+              );
               cacheChanged = true;
               break;
             case _opCreateSavingsGoal:
@@ -514,6 +850,9 @@ class AppRepository {
                 targetDate: payload['target_date'] == null
                     ? null
                     : DateTime.tryParse(payload['target_date'].toString()),
+                organizationId: _normalizedOrganizationId(
+                  payload['organization_id'],
+                ),
               );
               final localId = payload['local_id']?.toString();
               if (_isLocalId(localId)) {
@@ -536,6 +875,9 @@ class AppRepository {
                 amount: ((resolved['amount'] as num?) ?? 0).toDouble(),
                 accountId: (resolved['account_id'] ?? '').toString(),
                 note: resolved['note']?.toString(),
+                organizationId: _normalizedOrganizationId(
+                  resolved['organization_id'],
+                ),
               );
               cacheChanged = true;
               break;
@@ -554,6 +896,9 @@ class AppRepository {
                 ),
                 amountLimit:
                     ((resolved['amount_limit'] as num?) ?? 0).toDouble(),
+                organizationId: _normalizedOrganizationId(
+                  resolved['organization_id'],
+                ),
               );
               cacheChanged = true;
               break;
@@ -569,20 +914,34 @@ class AppRepository {
                 targetCurrency:
                     (resolved['target_currency'] ?? 'USD').toString(),
                 rate: ((resolved['rate'] as num?) ?? 1).toDouble(),
+                organizationId: _normalizedOrganizationId(
+                  resolved['organization_id'],
+                ),
               );
               cacheChanged = true;
               break;
             case _opCreateLoan:
+              final lPayload =
+                  await _resolveAccountPayload(payload, accountIdMap);
+              if (_containsUnresolvedLocalRef(lPayload)) {
+                remaining.add(op);
+                continue;
+              }
               final insertedLoanId = await _createLoanRemote(
-                personName: (payload['person_name'] ?? '').toString(),
+                personName: (lPayload['person_name'] ?? '').toString(),
                 totalAmount:
-                    ((payload['total_amount'] as num?) ?? 0).toDouble(),
-                direction: (payload['direction'] ?? 'owed_to_me').toString(),
-                currencyCode: (payload['currency_code'] ?? 'USD').toString(),
-                note: payload['note']?.toString(),
-                dueDate: payload['due_date'] == null
+                    ((lPayload['total_amount'] as num?) ?? 0).toDouble(),
+                direction: (lPayload['direction'] ?? 'owed_to_me').toString(),
+                currencyCode: (lPayload['currency_code'] ?? 'USD').toString(),
+                principalAccountId:
+                    (lPayload['principal_account_id'] ?? '').toString(),
+                note: lPayload['note']?.toString(),
+                dueDate: lPayload['due_date'] == null
                     ? null
-                    : DateTime.tryParse(payload['due_date'].toString()),
+                    : DateTime.tryParse(lPayload['due_date'].toString()),
+                organizationId: _normalizedOrganizationId(
+                  lPayload['organization_id'],
+                ),
               );
               final loanLocalId = payload['local_id']?.toString();
               if (_isLocalId(loanLocalId)) {
@@ -602,6 +961,9 @@ class AppRepository {
                 dueDate: payload['due_date'] == null
                     ? null
                     : DateTime.tryParse(payload['due_date'].toString()),
+                organizationId: _normalizedOrganizationId(
+                  payload['organization_id'],
+                ),
               );
               cacheChanged = true;
               break;
@@ -625,7 +987,29 @@ class AppRepository {
                       .toString(),
                 ),
                 note: resolvedLoan['note']?.toString(),
+                organizationId: _normalizedOrganizationId(
+                  resolvedLoan['organization_id'],
+                ),
               );
+              cacheChanged = true;
+              break;
+            case _opExecuteEntityTransfer:
+              final resolved = await _resolveEntityTransferPayload(
+                Map<String, dynamic>.from(payload),
+                accountIdMap: accountIdMap,
+                goalIdMap: goalIdMap,
+                loanIdMap: loanIdMap,
+              );
+              final fid = resolved['from_id']?.toString() ?? '';
+              final tid = resolved['to_id']?.toString() ?? '';
+              final brid = resolved['bridge_account_id']?.toString();
+              if (_isLocalId(fid) ||
+                  _isLocalId(tid) ||
+                  (brid != null && brid.isNotEmpty && _isLocalId(brid))) {
+                remaining.add(op);
+                continue;
+              }
+              await _executeEntityTransferRemote(resolved: resolved);
               cacheChanged = true;
               break;
             default:
@@ -657,7 +1041,9 @@ class AppRepository {
 
     return isUnresolved(payload['account_id']) ||
         isUnresolved(payload['transfer_account_id']) ||
+        isUnresolved(payload['principal_account_id']) ||
         isUnresolved(payload['category_id']) ||
+        isUnresolved(payload['transaction_id']) ||
         isUnresolved(payload['goal_id']) ||
         isUnresolved(payload['loan_id']);
   }
@@ -675,6 +1061,11 @@ class AppRepository {
     if (_isLocalId(transferAccountId) &&
         accountMap.containsKey(transferAccountId)) {
       data['transfer_account_id'] = accountMap[transferAccountId];
+    }
+    final principalAccountId = data['principal_account_id']?.toString();
+    if (_isLocalId(principalAccountId) &&
+        accountMap.containsKey(principalAccountId)) {
+      data['principal_account_id'] = accountMap[principalAccountId];
     }
     return data;
   }
@@ -727,6 +1118,60 @@ class AppRepository {
     return data;
   }
 
+  String? _resolveEntityIdForKind(
+    String? id,
+    String kind,
+    Map<String, String> accountIdMap,
+    Map<String, String> goalIdMap,
+    Map<String, String> loanIdMap,
+  ) {
+    if (id == null || id.isEmpty) return id;
+    final k = kind.toLowerCase();
+    if (!_isLocalId(id)) return id;
+    switch (k) {
+      case 'account':
+        return accountIdMap[id];
+      case 'savings_goal':
+        return goalIdMap[id];
+      case 'loan':
+        return loanIdMap[id];
+      default:
+        return id;
+    }
+  }
+
+  Future<Map<String, dynamic>> _resolveEntityTransferPayload(
+    Map<String, dynamic> payload, {
+    required Map<String, String> accountIdMap,
+    required Map<String, String> goalIdMap,
+    required Map<String, String> loanIdMap,
+  }) async {
+    final data = Map<String, dynamic>.from(payload);
+    final fk = (data['from_kind'] ?? '').toString();
+    final tk = (data['to_kind'] ?? '').toString();
+    data['from_id'] = _resolveEntityIdForKind(
+      data['from_id']?.toString(),
+      fk,
+      accountIdMap,
+      goalIdMap,
+      loanIdMap,
+    );
+    data['to_id'] = _resolveEntityIdForKind(
+      data['to_id']?.toString(),
+      tk,
+      accountIdMap,
+      goalIdMap,
+      loanIdMap,
+    );
+    final bridge = data['bridge_account_id']?.toString();
+    if (bridge != null && bridge.isNotEmpty) {
+      final resolved =
+          await _resolveAccountPayload({'account_id': bridge}, accountIdMap);
+      data['bridge_account_id'] = resolved['account_id'];
+    }
+    return data;
+  }
+
   Future<bool> isGlobalConversionEnabled() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_globalConversionEnabledKey) ?? false;
@@ -775,13 +1220,243 @@ class AppRepository {
       if (data == null) return null;
       final mapped = Map<String, dynamic>.from(data);
       await _writeCachedMap(_cacheKey('profile'), mapped);
+      _rememberWorkspaceFromProfile(mapped);
       return mapped;
     } catch (error) {
       if (_isNetworkError(error)) {
-        return _readCachedMap(_cacheKey('profile'));
+        final cached = await _readCachedMap(_cacheKey('profile'));
+        _rememberWorkspaceFromProfile(cached);
+        return cached;
       }
       rethrow;
     }
+  }
+
+  Future<void> _mergeCachedProfile(Map<String, dynamic> patch) async {
+    final cached =
+        await _readCachedMap(_cacheKey('profile')) ?? <String, dynamic>{};
+    for (final entry in patch.entries) {
+      cached[entry.key] = entry.value;
+    }
+    await _writeCachedMap(_cacheKey('profile'), cached);
+    _rememberWorkspaceFromProfile(cached);
+  }
+
+  Future<BusinessAccessState> fetchBusinessAccessState({
+    bool refreshEntitlement = false,
+  }) async {
+    if (refreshEntitlement) {
+      await refreshBusinessEntitlement();
+    }
+    final profile = await fetchProfile();
+    final service = BusinessEntitlementService.instance;
+    return BusinessAccessState.fromSources(
+      profile: profile,
+      entitlementActive: service.hasActiveEntitlement,
+      billingAvailable: service.isAvailable,
+      managementUrl: service.managementUrl,
+      errorMessage: service.lastError,
+    );
+  }
+
+  Future<bool> isBusinessModeEnabled() async {
+    final profile = await fetchProfile();
+    return (profile?['business_mode_enabled'] as bool?) ?? false;
+  }
+
+  Future<bool> isBusinessPro({bool refreshEntitlement = false}) async {
+    final access = await fetchBusinessAccessState(
+      refreshEntitlement: refreshEntitlement,
+    );
+    return access.isBusinessPro;
+  }
+
+  Future<void> refreshBusinessEntitlement() async {
+    final user = currentUser;
+    if (user == null) return;
+
+    final service = BusinessEntitlementService.instance;
+    await service.initialize(user: user);
+    await service.syncUser(user);
+    await service.refresh(invalidateCache: true);
+
+    final entitlement = service.entitlement;
+    var status = 'inactive';
+    if (!service.isAvailable) {
+      status = 'unavailable';
+    } else if (service.hasActiveEntitlement) {
+      if (entitlement?.billingIssueDetectedAt != null) {
+        status = 'billing_issue';
+      } else if (entitlement?.periodType == PeriodType.trial) {
+        status = 'trial';
+      } else if (entitlement?.expirationDate == null) {
+        status = 'lifetime';
+      } else {
+        status = 'active';
+      }
+    }
+
+    final patch = <String, dynamic>{
+      'business_pro_status': status,
+      'business_pro_updated_at': DateTime.now().toUtc().toIso8601String(),
+      'business_pro_latest_expiration': service.latestExpirationIso,
+      'business_pro_platform': service.platformLabel,
+    };
+
+    try {
+      await _upsertProfileFieldsRemote(patch);
+    } catch (error) {
+      if (!_isNetworkError(error) && !_isSchemaError(error)) rethrow;
+    }
+
+    await _mergeCachedProfile(patch);
+    _notifyDataChanged();
+  }
+
+  Future<void> setBusinessModeEnabled(bool enabled) async {
+    final payload = {'business_mode_enabled': enabled};
+    try {
+      await _updateBusinessModeRemote(enabled: enabled);
+      await _mergeCachedProfile(payload);
+      await _removeCachedKey(_cacheKey('workspaces'));
+      await _clearWorkspaceDataCaches();
+    } catch (error) {
+      if (!_isNetworkError(error) && !_isSchemaError(error)) rethrow;
+      if (_isNetworkError(error)) {
+        await _enqueueOperation(_opUpdateBusinessMode, payload);
+      }
+      await _mergeCachedProfile(payload);
+      await _removeCachedKey(_cacheKey('workspaces'));
+      await _clearWorkspaceDataCaches();
+    }
+    _notifyDataChanged();
+  }
+
+  Future<List<Map<String, dynamic>>> fetchWorkspaces() async {
+    final user = currentUser;
+    if (user == null) return [];
+
+    final profile = await fetchProfile();
+    final scope = _workspaceScopeFromProfile(profile);
+    final activeKind = scope.kind;
+    final activeOrganizationId = scope.organizationId;
+    final key = _cacheKey('workspaces');
+    final personalLabel =
+        ((profile?['full_name'] ?? '').toString().trim().isEmpty)
+            ? 'Personal'
+            : '${(profile?['full_name'] ?? '').toString().trim()} (Personal)';
+    final personalWorkspace = <String, dynamic>{
+      'kind': 'personal',
+      'organization_id': null,
+      'label': personalLabel,
+      'role': 'owner',
+      'is_active': activeKind != 'organization',
+    };
+
+    try {
+      final data = await _client
+          .from('organization_members')
+          .select(
+            'role, organization:organizations!organization_members_organization_id_fkey(id, name, slug)',
+          )
+          .eq('user_id', user.id)
+          .order('created_at');
+      final organizations = List<Map<String, dynamic>>.from(data)
+          .map((row) {
+            final organization = row['organization'];
+            final orgMap = organization is Map
+                ? Map<String, dynamic>.from(organization)
+                : <String, dynamic>{};
+            final orgId = orgMap['id']?.toString();
+            return <String, dynamic>{
+              'kind': 'organization',
+              'organization_id': orgId,
+              'label': (orgMap['name'] ?? 'Organization').toString(),
+              'slug': orgMap['slug']?.toString(),
+              'role': (row['role'] ?? 'member').toString(),
+              'is_active':
+                  activeKind == 'organization' && activeOrganizationId == orgId,
+            };
+          })
+          .toList();
+      final result = <Map<String, dynamic>>[
+        personalWorkspace,
+        ...organizations,
+      ];
+      await _writeCachedList(key, result);
+      return result;
+    } catch (error) {
+      if (_isNetworkError(error) || _isSchemaError(error)) {
+        final cached = await _readCachedList(key);
+        return cached.isEmpty ? [personalWorkspace] : cached;
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> setActiveWorkspace({
+    required String kind,
+    String? organizationId,
+  }) async {
+    final normalizedKind = kind.trim().toLowerCase();
+    if (normalizedKind != 'personal' && normalizedKind != 'organization') {
+      throw ArgumentError('Invalid workspace kind: $kind');
+    }
+    if (normalizedKind == 'organization' &&
+        (organizationId == null || organizationId.trim().isEmpty)) {
+      throw ArgumentError('Organization workspace requires an organization id.');
+    }
+
+    final payload = <String, dynamic>{
+      'active_workspace_kind': normalizedKind,
+      'active_workspace_organization_id':
+          normalizedKind == 'organization' ? organizationId : null,
+    };
+
+    try {
+      await _updateActiveWorkspaceRemote(
+        kind: normalizedKind,
+        organizationId: organizationId,
+      );
+      await _mergeCachedProfile(payload);
+      await _removeCachedKey(_cacheKey('workspaces'));
+      await _clearWorkspaceDataCaches();
+    } catch (error) {
+      if (!_isNetworkError(error) && !_isSchemaError(error)) rethrow;
+      if (_isNetworkError(error)) {
+        await _enqueueOperation(_opUpdateActiveWorkspace, payload);
+      }
+      await _mergeCachedProfile(payload);
+      await _removeCachedKey(_cacheKey('workspaces'));
+      await _clearWorkspaceDataCaches();
+    }
+
+    _notifyDataChanged();
+  }
+
+  Future<String> createBusinessWorkspace({
+    required String name,
+  }) async {
+    final user = currentUser;
+    if (user == null) return '';
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('Business name is required.');
+    }
+    final result = await _client.rpc(
+      'create_business_workspace',
+      params: {
+        'p_user_id': user.id,
+        'p_name': trimmed,
+      },
+    );
+    final organizationId = result?.toString() ?? '';
+    await _clearWorkspaceDataCaches();
+    await _removeCachedKey(_cacheKey('profile'));
+    await _removeCachedKey(_cacheKey('workspaces'));
+    await fetchProfile();
+    _notifyDataChanged();
+    return organizationId;
   }
 
   Future<String> fetchUserCurrencyCode() async {
@@ -819,15 +1494,44 @@ class AppRepository {
     }).eq('id', user.id);
   }
 
+  Future<void> _upsertProfileFieldsRemote(Map<String, dynamic> fields) async {
+    final user = currentUser;
+    if (user == null || fields.isEmpty) return;
+    await _client.from('profiles').update(fields).eq('id', user.id);
+  }
+
+  Future<void> _updateBusinessModeRemote({
+    required bool enabled,
+  }) async {
+    await _upsertProfileFieldsRemote({
+      'business_mode_enabled': enabled,
+    });
+  }
+
+  Future<void> _updateActiveWorkspaceRemote({
+    required String kind,
+    String? organizationId,
+  }) async {
+    await _upsertProfileFieldsRemote({
+      'active_workspace_kind': kind,
+      'active_workspace_organization_id':
+          kind == 'organization' ? organizationId : null,
+    });
+  }
+
   Future<List<Map<String, dynamic>>> fetchDashboardSummary() async {
     final user = currentUser;
     if (user == null) return [];
     await _syncPendingOperationsIfNeeded();
-    final key = _cacheKey('dashboard_summary');
+    final scope = await _activeWorkspaceScope();
+    final key = _dashboardSummaryKey(scope: scope);
     try {
       final data = await _client.rpc(
         'get_dashboard_summary',
-        params: {'p_user_id': user.id},
+        params: {
+          'p_user_id': user.id,
+          'p_organization_id': scope.organizationId,
+        },
       );
       final mapped = List<Map<String, dynamic>>.from(data as List<dynamic>);
       await _writeCachedList(key, mapped);
@@ -840,23 +1544,30 @@ class AppRepository {
     }
   }
 
-  Future<List<Map<String, dynamic>>> fetchAccounts() async {
+  /// When [forceRefresh] is true, pending ops sync runs immediately (no throttle)
+  /// so new accounts are on the server before this fetch — use before pickers
+  /// that must list every wallet (e.g. savings contributions).
+  Future<List<Map<String, dynamic>>> fetchAccounts(
+      {bool forceRefresh = false}) async {
     final user = currentUser;
     if (user == null) return [];
-    await _syncPendingOperationsIfNeeded();
+    await _syncPendingOperationsIfNeeded(force: forceRefresh);
+    final scope = await _activeWorkspaceScope();
+    final key = _accountsKey(scope: scope);
     try {
-      final data = await _client
+      dynamic query = _client
           .from('accounts')
           .select()
           .eq('user_id', user.id)
-          .eq('is_archived', false)
-          .order('created_at');
+          .eq('is_archived', false);
+      query = _applyWorkspaceFilter(query, scope.organizationId);
+      final data = await query.order('created_at');
       final mapped = List<Map<String, dynamic>>.from(data);
-      await _writeCachedList(_cacheKey('accounts'), mapped);
+      await _writeCachedList(key, mapped);
       return mapped;
     } catch (error) {
       if (_isNetworkError(error)) {
-        return _readCachedList(_cacheKey('accounts'));
+        return _readCachedList(key);
       }
       rethrow;
     }
@@ -869,26 +1580,33 @@ class AppRepository {
     required String currencyCode,
   }) async {
     final localId = _newLocalId('account');
+    final scope = await _activeWorkspaceScope();
+    final key = _accountsKey(scope: scope);
     try {
       await _createAccountRemote(
         name: name,
         type: type,
         openingBalance: openingBalance,
         currencyCode: currencyCode,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_cacheKey('accounts'));
+      await _removeCachedKey(key);
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opCreateAccount, {
-        'local_id': localId,
-        'name': name,
-        'type': type,
-        'opening_balance': openingBalance,
-        'currency_code': currencyCode,
-      });
-      final cached = await _readCachedList(_cacheKey('accounts'));
+      await _enqueueOperation(
+        _opCreateAccount,
+        await _payloadWithWorkspaceScope({
+          'local_id': localId,
+          'name': name,
+          'type': type,
+          'opening_balance': openingBalance,
+          'currency_code': currencyCode,
+        }, scope: scope),
+      );
+      final cached = await _readCachedList(key);
       cached.add({
         'id': localId,
+        'organization_id': scope.organizationId,
         'name': name,
         'type': type,
         'opening_balance': openingBalance,
@@ -897,7 +1615,7 @@ class AppRepository {
         'is_archived': false,
         'created_at': DateTime.now().toIso8601String(),
       });
-      await _writeCachedList(_cacheKey('accounts'), cached);
+      await _writeCachedList(key, cached);
     }
     _notifyDataChanged();
   }
@@ -907,6 +1625,7 @@ class AppRepository {
     required String type,
     required double openingBalance,
     required String currencyCode,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return '';
@@ -914,6 +1633,7 @@ class AppRepository {
         .from('accounts')
         .insert({
           'user_id': user.id,
+          'organization_id': organizationId,
           'name': name,
           'type': type,
           'opening_balance': openingBalance,
@@ -932,6 +1652,8 @@ class AppRepository {
     required String currencyCode,
     double? currentBalance,
   }) async {
+    final scope = await _activeWorkspaceScope();
+    final key = _accountsKey(scope: scope);
     try {
       await _updateAccountRemote(
         accountId: accountId,
@@ -939,18 +1661,22 @@ class AppRepository {
         type: type,
         currencyCode: currencyCode,
         currentBalance: currentBalance,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_cacheKey('accounts'));
+      await _removeCachedKey(key);
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opUpdateAccount, {
-        'account_id': accountId,
-        'name': name,
-        'type': type,
-        'currency_code': currencyCode,
-        if (currentBalance != null) 'current_balance': currentBalance,
-      });
-      final cached = await _readCachedList(_cacheKey('accounts'));
+      await _enqueueOperation(
+        _opUpdateAccount,
+        await _payloadWithWorkspaceScope({
+          'account_id': accountId,
+          'name': name,
+          'type': type,
+          'currency_code': currencyCode,
+          if (currentBalance != null) 'current_balance': currentBalance,
+        }, scope: scope),
+      );
+      final cached = await _readCachedList(key);
       for (final row in cached) {
         if (row['id']?.toString() == accountId) {
           row['name'] = name;
@@ -961,7 +1687,7 @@ class AppRepository {
           }
         }
       }
-      await _writeCachedList(_cacheKey('accounts'), cached);
+      await _writeCachedList(key, cached);
     }
     _notifyDataChanged();
   }
@@ -972,6 +1698,7 @@ class AppRepository {
     required String type,
     required String currencyCode,
     double? currentBalance,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return;
@@ -983,16 +1710,37 @@ class AppRepository {
     if (currentBalance != null) {
       updateData['current_balance'] = currentBalance;
     }
-    await _client
+    dynamic query = _client
         .from('accounts')
         .update(updateData)
         .eq('id', accountId)
         .eq('user_id', user.id);
+    query = _applyWorkspaceFilter(query, organizationId);
+    await query;
+  }
+
+  /// Re-authenticate with email + password (e.g. before destructive actions).
+  Future<void> verifyCurrentUserPassword(String password) async {
+    final user = currentUser;
+    if (user == null) {
+      throw StateError('Not signed in');
+    }
+    final email = user.email;
+    if (email == null || email.isEmpty) {
+      throw StateError(
+          'This sign-in method does not support password confirmation.');
+    }
+    await _client.auth.signInWithPassword(
+      email: email,
+      password: password,
+    );
   }
 
   Future<void> deleteAccount({
     required String accountId,
   }) async {
+    final scope = await _activeWorkspaceScope();
+    final key = _accountsKey(scope: scope);
     if (_isLocalId(accountId)) {
       await _removePendingWhere((op) {
         final payload = op.payload;
@@ -1003,61 +1751,82 @@ class AppRepository {
             opAccountId == accountId ||
             transferAccountId == accountId;
       });
-      final cached = await _readCachedList(_cacheKey('accounts'));
+      final cached = await _readCachedList(key);
       cached.removeWhere((row) => row['id']?.toString() == accountId);
-      await _writeCachedList(_cacheKey('accounts'), cached);
+      await _writeCachedList(key, cached);
       _notifyDataChanged();
       return;
     }
     try {
-      await _deleteAccountRemote(accountId: accountId);
-      await _removeCachedKey(_cacheKey('accounts'));
+      await _deleteAccountRemote(
+        accountId: accountId,
+        organizationId: scope.organizationId,
+      );
+      await _invalidateCachesAfterAccountCascadeDelete();
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opDeleteAccount, {'account_id': accountId});
-      final cached = await _readCachedList(_cacheKey('accounts'));
+      await _enqueueOperation(
+        _opDeleteAccount,
+        await _payloadWithWorkspaceScope({
+          'account_id': accountId,
+        }, scope: scope),
+      );
+      final cached = await _readCachedList(key);
       cached.removeWhere((row) => row['id']?.toString() == accountId);
-      await _writeCachedList(_cacheKey('accounts'), cached);
+      await _writeCachedList(key, cached);
+      await _invalidateCachesAfterAccountCascadeDelete();
     }
     _notifyDataChanged();
   }
 
+  Future<void> _invalidateCachesAfterAccountCascadeDelete() async {
+    await Future.wait([
+      _clearWorkspaceDataCaches(),
+    ]);
+    await _clearTransactionsMonthCaches();
+  }
+
   Future<void> _deleteAccountRemote({
     required String accountId,
+    String? organizationId,
   }) async {
-    final user = currentUser;
-    if (user == null) return;
-    await _client
-        .from('accounts')
-        .delete()
-        .eq('id', accountId)
-        .eq('user_id', user.id);
+    if (currentUser == null) return;
+    await _client.rpc(
+      'delete_account_cascade',
+      params: {
+        'p_account_id': accountId,
+        'p_organization_id': organizationId,
+      },
+    );
   }
 
   Future<List<Map<String, dynamic>>> fetchCategories(String type) async {
     final user = currentUser;
     if (user == null) return [];
     await _syncPendingOperationsIfNeeded();
-    final key = _cacheKey('categories:$type');
+    final scope = await _activeWorkspaceScope();
+    final key = _categoriesKey(type, scope: scope);
     final defaults = _defaultCategoriesFor(type);
     try {
-      var data = await _client
+      dynamic query = _client
           .from('categories')
           .select()
           .eq('user_id', user.id)
           .eq('type', type)
-          .eq('is_archived', false)
-          .order('name');
+          .eq('is_archived', false);
+      query = _applyWorkspaceFilter(query, scope.organizationId);
+      var data = await query.order('name');
       var mapped = List<Map<String, dynamic>>.from(data);
       if (mapped.isEmpty && defaults.isNotEmpty) {
         await _seedDefaultCategories(type, defaults);
-        data = await _client
+        dynamic refreshQuery = _client
             .from('categories')
             .select()
             .eq('user_id', user.id)
             .eq('type', type)
-            .eq('is_archived', false)
-            .order('name');
+            .eq('is_archived', false);
+        refreshQuery = _applyWorkspaceFilter(refreshQuery, scope.organizationId);
+        data = await refreshQuery.order('name');
         mapped = List<Map<String, dynamic>>.from(data);
       }
       await _writeCachedList(key, mapped);
@@ -1094,34 +1863,55 @@ class AppRepository {
   Future<void> createCategory({
     required String name,
     required String type,
+    String? iconKey,
+    String? colorHex,
   }) async {
     final localId = _newLocalId('category');
+    final scope = await _activeWorkspaceScope();
+    final key = _categoriesKey(type, scope: scope);
     try {
-      await _createCategoryRemote(name: name, type: type);
-      await _removeCachedKey(_cacheKey('categories:$type'));
+      await _createCategoryRemote(
+        name: name,
+        type: type,
+        iconKey: iconKey,
+        colorHex: colorHex,
+        organizationId: scope.organizationId,
+      );
+      await _removeCachedKey(key);
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opCreateCategory, {
-        'local_id': localId,
-        'name': name,
-        'type': type,
-      });
-      final cached = await _readCachedList(_cacheKey('categories:$type'));
+      await _enqueueOperation(
+        _opCreateCategory,
+        await _payloadWithWorkspaceScope({
+          'local_id': localId,
+          'name': name,
+          'type': type,
+          'icon': iconKey,
+          'color_hex': colorHex,
+        }, scope: scope),
+      );
+      final cached = await _readCachedList(key);
       cached.add({
         'id': localId,
+        'organization_id': scope.organizationId,
         'name': name,
         'type': type,
+        'icon': iconKey,
+        'color_hex': colorHex,
         'is_archived': false,
       });
       cached.sort((a, b) =>
           (a['name'] ?? '').toString().compareTo((b['name'] ?? '').toString()));
-      await _writeCachedList(_cacheKey('categories:$type'), cached);
+      await _writeCachedList(key, cached);
     }
   }
 
   Future<String> _createCategoryRemote({
     required String name,
     required String type,
+    String? iconKey,
+    String? colorHex,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return '';
@@ -1129,8 +1919,11 @@ class AppRepository {
         .from('categories')
         .insert({
           'user_id': user.id,
+          'organization_id': organizationId,
           'name': name,
           'type': type,
+          'icon': iconKey,
+          'color_hex': colorHex,
         })
         .select('id')
         .single();
@@ -1140,23 +1933,40 @@ class AppRepository {
   Future<void> updateCategory({
     required String categoryId,
     required String name,
+    String? iconKey,
+    String? colorHex,
   }) async {
+    final scope = await _activeWorkspaceScope();
     try {
-      await _updateCategoryRemote(categoryId: categoryId, name: name);
-      await _removeCachedKey(_cacheKey('categories:expense'));
-      await _removeCachedKey(_cacheKey('categories:income'));
+      await _updateCategoryRemote(
+        categoryId: categoryId,
+        name: name,
+        iconKey: iconKey,
+        colorHex: colorHex,
+        organizationId: scope.organizationId,
+      );
+      await _removeCachedKey(_categoriesKey('expense', scope: scope));
+      await _removeCachedKey(_categoriesKey('income', scope: scope));
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opUpdateCategory, {
-        'category_id': categoryId,
-        'name': name,
-      });
+      await _enqueueOperation(
+        _opUpdateCategory,
+        await _payloadWithWorkspaceScope({
+          'category_id': categoryId,
+          'name': name,
+          'icon': iconKey,
+          'color_hex': colorHex,
+        }, scope: scope),
+      );
       for (final type in ['expense', 'income']) {
-        final cached = await _readCachedList(_cacheKey('categories:$type'));
+        final cached =
+            await _readCachedList(_categoriesKey(type, scope: scope));
         var changed = false;
         for (final row in cached) {
           if (row['id']?.toString() == categoryId) {
             row['name'] = name;
+            row['icon'] = iconKey;
+            row['color_hex'] = colorHex;
             changed = true;
           }
         }
@@ -1164,7 +1974,7 @@ class AppRepository {
           cached.sort((a, b) => (a['name'] ?? '')
               .toString()
               .compareTo((b['name'] ?? '').toString()));
-          await _writeCachedList(_cacheKey('categories:$type'), cached);
+          await _writeCachedList(_categoriesKey(type, scope: scope), cached);
         }
       }
     }
@@ -1173,19 +1983,25 @@ class AppRepository {
   Future<void> _updateCategoryRemote({
     required String categoryId,
     required String name,
+    String? iconKey,
+    String? colorHex,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return;
-    await _client
-        .from('categories')
-        .update({'name': name})
-        .eq('id', categoryId)
-        .eq('user_id', user.id);
+    dynamic query = _client.from('categories').update({
+      'name': name,
+      'icon': iconKey,
+      'color_hex': colorHex,
+    }).eq('id', categoryId).eq('user_id', user.id);
+    query = _applyWorkspaceFilter(query, organizationId);
+    await query;
   }
 
   Future<void> deleteCategory({
     required String categoryId,
   }) async {
+    final scope = await _activeWorkspaceScope();
     if (_isLocalId(categoryId)) {
       await _removePendingWhere((op) {
         final payload = op.payload;
@@ -1194,54 +2010,70 @@ class AppRepository {
         return createLocalId == categoryId || opCategoryId == categoryId;
       });
       for (final type in ['expense', 'income']) {
-        final cached = await _readCachedList(_cacheKey('categories:$type'));
+        final cached =
+            await _readCachedList(_categoriesKey(type, scope: scope));
         cached.removeWhere((row) => row['id']?.toString() == categoryId);
-        await _writeCachedList(_cacheKey('categories:$type'), cached);
+        await _writeCachedList(_categoriesKey(type, scope: scope), cached);
       }
       return;
     }
     try {
-      await _deleteCategoryRemote(categoryId: categoryId);
-      await _removeCachedKey(_cacheKey('categories:expense'));
-      await _removeCachedKey(_cacheKey('categories:income'));
+      await _deleteCategoryRemote(
+        categoryId: categoryId,
+        organizationId: scope.organizationId,
+      );
+      await _removeCachedKey(_categoriesKey('expense', scope: scope));
+      await _removeCachedKey(_categoriesKey('income', scope: scope));
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opDeleteCategory, {'category_id': categoryId});
+      await _enqueueOperation(
+        _opDeleteCategory,
+        await _payloadWithWorkspaceScope({
+          'category_id': categoryId,
+        }, scope: scope),
+      );
       for (final type in ['expense', 'income']) {
-        final cached = await _readCachedList(_cacheKey('categories:$type'));
+        final cached =
+            await _readCachedList(_categoriesKey(type, scope: scope));
         cached.removeWhere((row) => row['id']?.toString() == categoryId);
-        await _writeCachedList(_cacheKey('categories:$type'), cached);
+        await _writeCachedList(_categoriesKey(type, scope: scope), cached);
       }
     }
   }
 
   Future<void> _deleteCategoryRemote({
     required String categoryId,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return;
-    await _client
+    dynamic query = _client
         .from('categories')
         .delete()
         .eq('id', categoryId)
         .eq('user_id', user.id);
+    query = _applyWorkspaceFilter(query, organizationId);
+    await query;
   }
 
   Future<List<Map<String, dynamic>>> fetchTransactions() async {
     final user = currentUser;
     if (user == null) return [];
     await _syncPendingOperationsIfNeeded();
-    final key = _cacheKey('transactions');
+    final scope = await _activeWorkspaceScope();
+    final key = _transactionsKey(scope: scope);
     try {
-      final data = await _client
+      dynamic query = _client
           .from('transactions')
           .select(
             '*, '
             'account:accounts!transactions_account_id_fkey(name, currency_code), '
             'transfer_account:accounts!transactions_transfer_account_id_fkey(name, currency_code), '
-            'categories(name)',
+            'categories(name, icon, color_hex)',
           )
-          .eq('user_id', user.id)
+          .eq('user_id', user.id);
+      query = _applyWorkspaceFilter(query, scope.organizationId);
+      final data = await query
           .order('transaction_date', ascending: false)
           .limit(200);
       final mapped = List<Map<String, dynamic>>.from(data);
@@ -1260,26 +2092,28 @@ class AppRepository {
     final user = currentUser;
     if (user == null) return [];
     await _syncPendingOperationsIfNeeded();
+    final scope = await _activeWorkspaceScope();
 
     final start = DateTime(month.year, month.month, 1);
     final end = DateTime(month.year, month.month + 1, 1);
-    final startDate = start.toIso8601String().split('T').first;
-    final endDate = end.toIso8601String().split('T').first;
-    final key = _transactionsMonthCacheKey(month);
+    final startDate = start.toUtc().toIso8601String();
+    final endDate = end.toUtc().toIso8601String();
+    final key = _transactionsMonthCacheKey(month, scope: scope);
 
     try {
-      final data = await _client
+      dynamic query = _client
           .from('transactions')
           .select(
             '*, '
             'account:accounts!transactions_account_id_fkey(name, currency_code), '
             'transfer_account:accounts!transactions_transfer_account_id_fkey(name, currency_code), '
-            'categories(name)',
+            'categories(name, icon, color_hex)',
           )
           .eq('user_id', user.id)
           .gte('transaction_date', startDate)
-          .lt('transaction_date', endDate)
-          .order('transaction_date', ascending: false);
+          .lt('transaction_date', endDate);
+      query = _applyWorkspaceFilter(query, scope.organizationId);
+      final data = await query.order('transaction_date', ascending: false);
 
       final mapped = List<Map<String, dynamic>>.from(data);
       await _writeCachedList(key, mapped);
@@ -1290,7 +2124,7 @@ class AppRepository {
         if (cachedMonth.isNotEmpty) {
           return cachedMonth;
         }
-        final allCached = await _readCachedList(_cacheKey('transactions'));
+        final allCached = await _readCachedList(_transactionsKey(scope: scope));
         if (allCached.isEmpty) {
           return [];
         }
@@ -1300,9 +2134,15 @@ class AppRepository {
           if (parsed == null) return false;
           return !parsed.isBefore(start) && parsed.isBefore(end);
         }).toList()
-          ..sort((a, b) => (b['transaction_date'] ?? '')
-              .toString()
-              .compareTo((a['transaction_date'] ?? '').toString()));
+          ..sort((a, b) {
+            final da =
+                DateTime.tryParse((a['transaction_date'] ?? '').toString()) ??
+                    DateTime.fromMillisecondsSinceEpoch(0);
+            final db =
+                DateTime.tryParse((b['transaction_date'] ?? '').toString()) ??
+                    DateTime.fromMillisecondsSinceEpoch(0);
+            return db.compareTo(da);
+          });
         await _writeCachedList(key, filtered);
         return filtered;
       }
@@ -1318,10 +2158,14 @@ class AppRepository {
     required DateTime transactionDate,
     String? note,
     String? transferAccountId,
+    double? transferCreditAmount,
   }) async {
     final localId = _newLocalId('transaction');
+    final scope = await _activeWorkspaceScope();
+    final txKey = _transactionsKey(scope: scope);
+    final accountsKey = _accountsKey(scope: scope);
     try {
-      await _createTransactionRemote(
+      await _ledger.createTransaction(
         accountId: accountId,
         categoryId: categoryId,
         kind: kind,
@@ -1329,27 +2173,44 @@ class AppRepository {
         transactionDate: transactionDate,
         note: note,
         transferAccountId: transferAccountId,
+        transferCreditAmount: transferCreditAmount,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_cacheKey('transactions'));
+      await _removeCachedKey(txKey);
       await _clearTransactionsMonthCaches();
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opCreateTransaction, {
-        'local_id': localId,
-        'account_id': accountId,
-        'category_id': categoryId,
-        'kind': kind,
-        'amount': amount,
-        'transaction_date': transactionDate.toIso8601String(),
-        'note': note,
-        'transfer_account_id': transferAccountId,
-      });
-      final cached = await _readCachedList(_cacheKey('transactions'));
-      final accounts = await _readCachedList(_cacheKey('accounts'));
+      final cachedSourceBalance = await _cachedAccountBalance(accountId);
+      if ((kind == 'expense' || kind == 'transfer') &&
+          cachedSourceBalance != null &&
+          cachedSourceBalance < amount) {
+        throw Exception(
+          kind == 'transfer'
+              ? 'Insufficient balance in source account.'
+              : 'Insufficient balance in account.',
+        );
+      }
+      await _enqueueOperation(
+        _opCreateTransaction,
+        await _payloadWithWorkspaceScope({
+          'local_id': localId,
+          'account_id': accountId,
+          'category_id': categoryId,
+          'kind': kind,
+          'amount': amount,
+          'transaction_date': transactionDate.toUtc().toIso8601String(),
+          'note': note,
+          'transfer_account_id': transferAccountId,
+          if (transferCreditAmount != null)
+            'transfer_credit_amount': transferCreditAmount,
+        }, scope: scope),
+      );
+      final cached = await _readCachedList(txKey);
+      final accounts = await _readCachedList(accountsKey);
       final categoriesExpense =
-          await _readCachedList(_cacheKey('categories:expense'));
+          await _readCachedList(_categoriesKey('expense', scope: scope));
       final categoriesIncome =
-          await _readCachedList(_cacheKey('categories:income'));
+          await _readCachedList(_categoriesKey('income', scope: scope));
       Map<String, dynamic>? account;
       Map<String, dynamic>? transferAccount;
       Map<String, dynamic>? category;
@@ -1366,11 +2227,14 @@ class AppRepository {
       }
       cached.insert(0, {
         'id': localId,
+        'organization_id': scope.organizationId,
         'account_id': accountId,
         'category_id': categoryId,
         'kind': kind,
         'amount': amount,
-        'transaction_date': transactionDate.toIso8601String().split('T').first,
+        if (transferCreditAmount != null)
+          'transfer_credit_amount': transferCreditAmount,
+        'transaction_date': transactionDate.toUtc().toIso8601String(),
         'note': note,
         'transfer_account_id': transferAccountId,
         'account': account == null
@@ -1392,92 +2256,289 @@ class AppRepository {
                 'name': (category['name'] ?? '').toString(),
               },
       });
-      await _writeCachedList(_cacheKey('transactions'), cached);
+      await _applyAccountBalanceDeltasInCache(
+        _transactionBalanceDeltas(
+          kind: kind,
+          accountId: accountId,
+          amount: amount,
+          transferAccountId: transferAccountId,
+          transferCreditAmount: transferCreditAmount,
+        ),
+      );
+      await _writeCachedList(txKey, cached);
       await _clearTransactionsMonthCaches();
     }
     _notifyDataChanged();
   }
 
-  Future<void> _createTransactionRemote({
-    required String accountId,
-    String? categoryId,
-    required String kind,
+  /// Atomic transfer between accounts, savings goals, and loans. Uses the same
+  /// ledger rules as individual flows (transfer txn, add/refund savings,
+  /// record loan payment). [bridgeAccountId] is required for savings↔savings,
+  /// savings→loan, and loan→savings.
+  Future<void> executeEntityTransfer({
+    required String fromKind,
+    required String fromId,
+    required String toKind,
+    required String toId,
     required double amount,
+    String? bridgeAccountId,
+    double? transferCreditAmount,
     required DateTime transactionDate,
     String? note,
-    String? transferAccountId,
   }) async {
     final user = currentUser;
     if (user == null) return;
-    await _client.rpc(
-      'create_transaction',
-      params: {
-        'p_user_id': user.id,
-        'p_account_id': accountId,
-        'p_category_id': categoryId,
-        'p_kind': kind,
-        'p_amount': amount,
-        'p_transaction_date': transactionDate.toIso8601String(),
-        'p_note': note,
-        'p_transfer_account_id': transferAccountId,
-      },
-    );
+    final scope = await _activeWorkspaceScope();
+    final resolved = <String, dynamic>{
+      'from_kind': fromKind,
+      'from_id': fromId,
+      'to_kind': toKind,
+      'to_id': toId,
+      'amount': amount,
+      'transaction_date': transactionDate.toUtc().toIso8601String(),
+      'note': note,
+      if (bridgeAccountId != null && bridgeAccountId.isNotEmpty)
+        'bridge_account_id': bridgeAccountId,
+      if (transferCreditAmount != null)
+        'transfer_credit_amount': transferCreditAmount,
+    };
+    try {
+      await _executeEntityTransferRemote(
+        resolved: {
+          ...resolved,
+          'organization_id': scope.organizationId,
+        },
+      );
+      await _invalidateAfterEntityTransfer();
+    } catch (error) {
+      if (!_isNetworkError(error)) rethrow;
+      await _enqueueOperation(
+        _opExecuteEntityTransfer,
+        await _payloadWithWorkspaceScope(resolved, scope: scope),
+      );
+      throw Exception(
+        'Offline: transfer queued; it will complete when you reconnect.',
+      );
+    }
+    _notifyDataChanged();
+  }
+
+  Future<void> _executeEntityTransferRemote({
+    required Map<String, dynamic> resolved,
+  }) async {
+    final user = currentUser;
+    if (user == null) return;
+    final params = <String, dynamic>{
+      'p_user_id': user.id,
+      'p_organization_id': _normalizedOrganizationId(resolved['organization_id']),
+      'p_from_kind': resolved['from_kind'],
+      'p_from_id': resolved['from_id'],
+      'p_to_kind': resolved['to_kind'],
+      'p_to_id': resolved['to_id'],
+      'p_amount': (resolved['amount'] as num).toDouble(),
+      'p_transaction_date': resolved['transaction_date'],
+      'p_note': resolved['note'],
+    };
+    final b = resolved['bridge_account_id']?.toString();
+    if (b != null && b.isNotEmpty) {
+      params['p_bridge_account_id'] = b;
+    }
+    final tc = (resolved['transfer_credit_amount'] as num?)?.toDouble();
+    if (tc != null) {
+      params['p_transfer_credit_amount'] = tc;
+    }
+    await _client.rpc('execute_entity_transfer', params: params);
+  }
+
+  Future<void> _invalidateAfterEntityTransfer() async {
+    await _clearWorkspaceDataCaches();
+    await _clearTransactionsMonthCaches();
+  }
+
+  /// Edits an existing transaction (amount, category, note). Balance changes are
+  /// computed on the server. [transferCreditAmount] is required logic for
+  /// cross-currency transfers (same as create).
+  Future<void> updateTransaction({
+    required String transactionId,
+    required double amount,
+    String? categoryId,
+    String? note,
+    double? transferCreditAmount,
+  }) async {
+    final scope = await _activeWorkspaceScope();
+    final txKey = _transactionsKey(scope: scope);
+    if (_isLocalId(transactionId)) {
+      throw Exception(
+          'Sync this transaction when online before editing (pending save).');
+    }
+    try {
+      await _ledger.updateTransaction(
+        transactionId: transactionId,
+        amount: amount,
+        categoryId: categoryId,
+        note: note,
+        transferCreditAmount: transferCreditAmount,
+        organizationId: scope.organizationId,
+      );
+      await _removeCachedKey(txKey);
+      await _clearTransactionsMonthCaches();
+    } catch (error) {
+      if (!_isNetworkError(error)) rethrow;
+      final cached = await _readCachedList(txKey);
+      final original = _findCachedRowById(cached, transactionId);
+      if (original == null) {
+        throw Exception('Transaction not found in offline cache.');
+      }
+      final updatedPreview = Map<String, dynamic>.from(original)
+        ..['amount'] = amount
+        ..['category_id'] = categoryId
+        ..['note'] = note;
+      if ((updatedPreview['kind'] ?? '').toString() == 'transfer') {
+        if (transferCreditAmount != null) {
+          updatedPreview['transfer_credit_amount'] = transferCreditAmount;
+        } else {
+          updatedPreview.remove('transfer_credit_amount');
+        }
+      } else {
+        updatedPreview.remove('transfer_credit_amount');
+      }
+      final accountDeltas = _diffBalanceDeltas(
+        _transactionBalanceDeltasFromRow(original),
+        _transactionBalanceDeltasFromRow(updatedPreview),
+      );
+      if (accountDeltas.isNotEmpty) {
+        final accounts = await _readCachedList(_accountsKey(scope: scope));
+        final sourceId = (original['account_id'] ?? '').toString();
+        final destId = (original['transfer_account_id'] ?? '').toString();
+        for (final account in accounts) {
+          final id = account['id']?.toString();
+          if (id == null) continue;
+          final delta = accountDeltas[id];
+          if (delta == null) continue;
+          final current =
+              ((account['current_balance'] as num?) ?? 0).toDouble();
+          if (current + delta < 0) {
+            if ((original['kind'] ?? '').toString() == 'transfer' &&
+                id == destId) {
+              throw Exception('Insufficient balance in destination account.');
+            }
+            if ((original['kind'] ?? '').toString() == 'transfer' &&
+                id == sourceId) {
+              throw Exception('Insufficient balance in source account.');
+            }
+            throw Exception('Insufficient balance in account.');
+          }
+        }
+      }
+      await _enqueueOperation(
+        _opUpdateTransaction,
+        await _payloadWithWorkspaceScope({
+          'transaction_id': transactionId,
+          'amount': amount,
+          'category_id': categoryId,
+          'note': note,
+          if (transferCreditAmount != null)
+            'transfer_credit_amount': transferCreditAmount,
+        }, scope: scope),
+      );
+      for (final row in cached) {
+        if (row['id']?.toString() != transactionId) continue;
+        row['amount'] = amount;
+        row['category_id'] = categoryId;
+        row['note'] = note;
+        if ((row['kind'] ?? '').toString() == 'transfer') {
+          if (transferCreditAmount != null) {
+            row['transfer_credit_amount'] = transferCreditAmount;
+          } else {
+            row.remove('transfer_credit_amount');
+          }
+        } else {
+          row.remove('transfer_credit_amount');
+        }
+        break;
+      }
+      final updated = _findCachedRowById(cached, transactionId);
+      if (updated != null) {
+        await _applyAccountBalanceDeltasInCache(
+          _diffBalanceDeltas(
+            _transactionBalanceDeltasFromRow(original),
+            _transactionBalanceDeltasFromRow(updated),
+          ),
+        );
+      }
+      await _writeCachedList(txKey, cached);
+      await _clearTransactionsMonthCaches();
+    }
+    _notifyDataChanged();
   }
 
   Future<void> deleteTransaction(String transactionId) async {
+    final scope = await _activeWorkspaceScope();
+    final txKey = _transactionsKey(scope: scope);
     if (_isLocalId(transactionId)) {
+      final cached = await _readCachedList(txKey);
+      final row = _findCachedRowById(cached, transactionId);
       await _removePendingWhere((op) {
         final payload = op.payload;
         final createLocalId = payload['local_id']?.toString();
         final opTxId = payload['transaction_id']?.toString();
         return createLocalId == transactionId || opTxId == transactionId;
       });
-      final cached = await _readCachedList(_cacheKey('transactions'));
       cached.removeWhere((row) => row['id']?.toString() == transactionId);
-      await _writeCachedList(_cacheKey('transactions'), cached);
+      if (row != null) {
+        final reverse = _transactionBalanceDeltasFromRow(row).map(
+          (key, value) => MapEntry(key, -value),
+        );
+        await _applyAccountBalanceDeltasInCache(reverse);
+      }
+      await _writeCachedList(txKey, cached);
       await _clearTransactionsMonthCaches();
       _notifyDataChanged();
       return;
     }
     try {
-      await _deleteTransactionRemote(transactionId);
-      await _removeCachedKey(_cacheKey('transactions'));
+      await _ledger.deleteTransaction(
+        transactionId,
+        organizationId: scope.organizationId,
+      );
+      await _removeCachedKey(txKey);
       await _clearTransactionsMonthCaches();
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
+      final cached = await _readCachedList(txKey);
+      final row = _findCachedRowById(cached, transactionId);
       await _enqueueOperation(
-          _opDeleteTransaction, {'transaction_id': transactionId});
-      final cached = await _readCachedList(_cacheKey('transactions'));
+        _opDeleteTransaction,
+        await _payloadWithWorkspaceScope({
+          'transaction_id': transactionId,
+        }, scope: scope),
+      );
       cached.removeWhere((row) => row['id']?.toString() == transactionId);
-      await _writeCachedList(_cacheKey('transactions'), cached);
+      if (row != null) {
+        final reverse = _transactionBalanceDeltasFromRow(row).map(
+          (key, value) => MapEntry(key, -value),
+        );
+        await _applyAccountBalanceDeltasInCache(reverse);
+      }
+      await _writeCachedList(txKey, cached);
       await _clearTransactionsMonthCaches();
     }
     _notifyDataChanged();
-  }
-
-  Future<void> _deleteTransactionRemote(String transactionId) async {
-    final user = currentUser;
-    if (user == null) return;
-    await _client.rpc(
-      'delete_transaction',
-      params: {
-        'p_user_id': user.id,
-        'p_transaction_id': transactionId,
-      },
-    );
   }
 
   Future<List<Map<String, dynamic>>> fetchSavingsGoals() async {
     final user = currentUser;
     if (user == null) return [];
     await _syncPendingOperationsIfNeeded();
-    final key = _cacheKey('savings_goals');
+    final scope = await _activeWorkspaceScope();
+    final key = _savingsGoalsKey(scope: scope);
     try {
-      final data = await _client
+      dynamic query = _client
           .from('savings_goals')
           .select()
-          .eq('user_id', user.id)
-          .order('created_at', ascending: false);
+          .eq('user_id', user.id);
+      query = _applyWorkspaceFilter(query, scope.organizationId);
+      final data = await query.order('created_at', ascending: false);
       final mapped = List<Map<String, dynamic>>.from(data);
       await _writeCachedList(key, mapped);
       return mapped;
@@ -1496,26 +2557,33 @@ class AppRepository {
     DateTime? targetDate,
   }) async {
     final localId = _newLocalId('goal');
+    final scope = await _activeWorkspaceScope();
+    final key = _savingsGoalsKey(scope: scope);
     try {
       await _createSavingsGoalRemote(
         name: name,
         targetAmount: targetAmount,
         currencyCode: currencyCode,
         targetDate: targetDate,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_cacheKey('savings_goals'));
+      await _removeCachedKey(key);
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opCreateSavingsGoal, {
-        'local_id': localId,
-        'name': name,
-        'target_amount': targetAmount,
-        'currency_code': currencyCode,
-        'target_date': targetDate?.toIso8601String(),
-      });
-      final cached = await _readCachedList(_cacheKey('savings_goals'));
+      await _enqueueOperation(
+        _opCreateSavingsGoal,
+        await _payloadWithWorkspaceScope({
+          'local_id': localId,
+          'name': name,
+          'target_amount': targetAmount,
+          'currency_code': currencyCode,
+          'target_date': targetDate?.toIso8601String(),
+        }, scope: scope),
+      );
+      final cached = await _readCachedList(key);
       cached.insert(0, {
         'id': localId,
+        'organization_id': scope.organizationId,
         'name': name,
         'target_amount': targetAmount,
         'current_amount': 0,
@@ -1523,7 +2591,7 @@ class AppRepository {
         'target_date': targetDate?.toIso8601String(),
         'created_at': DateTime.now().toIso8601String(),
       });
-      await _writeCachedList(_cacheKey('savings_goals'), cached);
+      await _writeCachedList(key, cached);
     }
   }
 
@@ -1532,6 +2600,7 @@ class AppRepository {
     required double targetAmount,
     required String currencyCode,
     DateTime? targetDate,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return '';
@@ -1539,6 +2608,7 @@ class AppRepository {
         .from('savings_goals')
         .insert({
           'user_id': user.id,
+          'organization_id': organizationId,
           'name': name,
           'target_amount': targetAmount,
           'currency_code': currencyCode.toUpperCase(),
@@ -1555,6 +2625,11 @@ class AppRepository {
     required String accountId,
     String? note,
   }) async {
+    final scope = await _activeWorkspaceScope();
+    final goalsKey = _savingsGoalsKey(scope: scope);
+    final contributionsKey = _savingsGoalContributionsKey(scope: scope);
+    final accountsKey = _accountsKey(scope: scope);
+    final transactionsKey = _transactionsKey(scope: scope);
     final goals = await fetchSavingsGoals();
     final goal = goals.firstWhere(
       (row) => row['id']?.toString() == goalId,
@@ -1576,37 +2651,77 @@ class AppRepository {
         amount: amount,
         accountId: accountId,
         note: note,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_cacheKey('savings_goals'));
-      await _removeCachedKey(_cacheKey('savings_goal_contributions'));
-      await _removeCachedKey(_cacheKey('accounts'));
+      await _removeCachedKey(goalsKey);
+      await _removeCachedKey(contributionsKey);
+      await _removeCachedKey(accountsKey);
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opAddSavingsProgress, {
-        'goal_id': goalId,
-        'amount': amount,
-        'account_id': accountId,
-        'note': note,
-      });
-      final goals = await _readCachedList(_cacheKey('savings_goals'));
+      final cachedBalance = await _cachedAccountBalance(accountId);
+      if (cachedBalance != null && cachedBalance < amount) {
+        throw Exception('Insufficient balance in selected account.');
+      }
+      await _enqueueOperation(
+        _opAddSavingsProgress,
+        await _payloadWithWorkspaceScope({
+          'goal_id': goalId,
+          'amount': amount,
+          'account_id': accountId,
+          'note': note,
+        }, scope: scope),
+      );
+      final goals = await _readCachedList(goalsKey);
       for (final row in goals) {
         if (row['id']?.toString() == goalId) {
           final current = ((row['current_amount'] as num?) ?? 0).toDouble();
           row['current_amount'] = current + amount;
         }
       }
-      await _writeCachedList(_cacheKey('savings_goals'), goals);
-      final contributions =
-          await _readCachedList(_cacheKey('savings_goal_contributions'));
+      await _applyAccountBalanceDeltasInCache({accountId: -amount});
+      await _writeCachedList(goalsKey, goals);
+      final contributions = await _readCachedList(contributionsKey);
+      final contributionId = _newLocalId('contribution');
       contributions.insert(0, {
-        'id': _newLocalId('contribution'),
+        'id': contributionId,
+        'organization_id': scope.organizationId,
         'goal_id': goalId,
         'amount': amount,
         'note': note,
         'created_at': DateTime.now().toIso8601String(),
       });
-      await _writeCachedList(
-          _cacheKey('savings_goal_contributions'), contributions);
+      await _writeCachedList(contributionsKey, contributions);
+      final accounts = await _readCachedList(accountsKey);
+      Map<String, dynamic>? account;
+      for (final row in accounts) {
+        if (row['id']?.toString() == accountId) {
+          account = row;
+          break;
+        }
+      }
+      final transactions = await _readCachedList(transactionsKey);
+      final goalName = (goal['name'] ?? '').toString();
+      transactions.insert(0, {
+        'id': _newLocalId('savings_tx'),
+        'organization_id': scope.organizationId,
+        'account_id': accountId,
+        'category_id': null,
+        'kind': 'expense',
+        'amount': amount,
+        'source_type': 'savings_contribution',
+        'source_ref_id': contributionId,
+        'note': note ?? 'Savings contribution: $goalName',
+        'transaction_date': DateTime.now().toUtc().toIso8601String(),
+        'transfer_account_id': null,
+        'account': account == null
+            ? null
+            : {
+                'name': (account['name'] ?? '').toString(),
+                'currency_code': (account['currency_code'] ?? 'USD').toString(),
+              },
+      });
+      await _writeCachedList(transactionsKey, transactions);
+      await _clearTransactionsMonthCaches();
     }
     _notifyDataChanged();
   }
@@ -1616,6 +2731,7 @@ class AppRepository {
     required double amount,
     required String accountId,
     String? note,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return;
@@ -1623,6 +2739,7 @@ class AppRepository {
       'add_savings_progress',
       params: {
         'p_user_id': user.id,
+        'p_organization_id': organizationId,
         'p_goal_id': goalId,
         'p_amount': amount,
         'p_account_id': accountId,
@@ -1637,6 +2754,7 @@ class AppRepository {
     required double targetAmount,
     required String currencyCode,
   }) async {
+    final scope = await _activeWorkspaceScope();
     final current = await fetchSavingsGoals();
     final goal = current.firstWhere(
       (row) => row['id']?.toString() == goalId,
@@ -1653,8 +2771,9 @@ class AppRepository {
         name: name,
         targetAmount: targetAmount,
         currencyCode: currencyCode,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_cacheKey('savings_goals'));
+      await _removeCachedKey(_savingsGoalsKey(scope: scope));
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
       throw Exception('Cannot edit savings goal while offline.');
@@ -1667,6 +2786,7 @@ class AppRepository {
     required String name,
     required double targetAmount,
     required String currencyCode,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return;
@@ -1674,6 +2794,7 @@ class AppRepository {
       'update_savings_goal',
       params: {
         'p_user_id': user.id,
+        'p_organization_id': organizationId,
         'p_goal_id': goalId,
         'p_name': name,
         'p_target_amount': targetAmount,
@@ -1688,17 +2809,19 @@ class AppRepository {
     required String accountId,
     String? note,
   }) async {
+    final scope = await _activeWorkspaceScope();
     try {
       await _refundSavingsProgressRemote(
         goalId: goalId,
         amount: amount,
         accountId: accountId,
         note: note,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_cacheKey('savings_goals'));
-      await _removeCachedKey(_cacheKey('savings_goal_contributions'));
-      await _removeCachedKey(_cacheKey('accounts'));
-      await _removeCachedKey(_cacheKey('transactions'));
+      await _removeCachedKey(_savingsGoalsKey(scope: scope));
+      await _removeCachedKey(_savingsGoalContributionsKey(scope: scope));
+      await _removeCachedKey(_accountsKey(scope: scope));
+      await _removeCachedKey(_transactionsKey(scope: scope));
       await _clearTransactionsMonthCaches();
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
@@ -1712,6 +2835,7 @@ class AppRepository {
     required double amount,
     required String accountId,
     String? note,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return;
@@ -1719,6 +2843,7 @@ class AppRepository {
       'refund_savings_progress',
       params: {
         'p_user_id': user.id,
+        'p_organization_id': organizationId,
         'p_goal_id': goalId,
         'p_amount': amount,
         'p_account_id': accountId,
@@ -1732,21 +2857,26 @@ class AppRepository {
     required DateTime monthStart,
     required double amountLimit,
   }) async {
+    final scope = await _activeWorkspaceScope();
     try {
       await _upsertBudgetRemote(
         categoryId: categoryId,
         monthStart: monthStart,
         amountLimit: amountLimit,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_budgetsMonthCacheKey(monthStart));
+      await _removeCachedKey(_budgetsMonthCacheKey(monthStart, scope: scope));
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opUpsertBudget, {
-        'category_id': categoryId,
-        'month_start': monthStart.toIso8601String(),
-        'amount_limit': amountLimit,
-      });
-      await _removeCachedKey(_budgetsMonthCacheKey(monthStart));
+      await _enqueueOperation(
+        _opUpsertBudget,
+        await _payloadWithWorkspaceScope({
+          'category_id': categoryId,
+          'month_start': monthStart.toIso8601String(),
+          'amount_limit': amountLimit,
+        }, scope: scope),
+      );
+      await _removeCachedKey(_budgetsMonthCacheKey(monthStart, scope: scope));
     }
   }
 
@@ -1754,11 +2884,13 @@ class AppRepository {
     required String categoryId,
     required DateTime monthStart,
     required double amountLimit,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return;
     await _client.from('budgets').upsert({
       'user_id': user.id,
+      'organization_id': organizationId,
       'category_id': categoryId,
       'month_start': monthStart.toIso8601String().split('T').first,
       'amount_limit': amountLimit,
@@ -1770,17 +2902,20 @@ class AppRepository {
     final user = currentUser;
     if (user == null) return [];
     await _syncPendingOperationsIfNeeded();
+    final scope = await _activeWorkspaceScope();
     final normalized = DateTime(monthStart.year, monthStart.month, 1)
         .toIso8601String()
         .split('T')
         .first;
-    final key = _budgetsMonthCacheKey(monthStart);
+    final key = _budgetsMonthCacheKey(monthStart, scope: scope);
     try {
-      final data = await _client
+      dynamic query = _client
           .from('budgets')
           .select('*, categories(name)')
           .eq('user_id', user.id)
           .eq('month_start', normalized);
+      query = _applyWorkspaceFilter(query, scope.organizationId);
+      final data = await query;
       final mapped = List<Map<String, dynamic>>.from(data);
       await _writeCachedList(key, mapped);
       return mapped;
@@ -1795,11 +2930,13 @@ class AppRepository {
   Future<List<Map<String, dynamic>>> fetchRecurringTransactions() async {
     final user = currentUser;
     if (user == null) return [];
-    final data = await _client
+    final scope = await _activeWorkspaceScope();
+    dynamic query = _client
         .from('recurring_transactions')
         .select('*, accounts(name), categories(name)')
-        .eq('user_id', user.id)
-        .order('next_run_date');
+        .eq('user_id', user.id);
+    query = _applyWorkspaceFilter(query, scope.organizationId);
+    final data = await query.order('next_run_date');
     return List<Map<String, dynamic>>.from(data);
   }
 
@@ -1814,8 +2951,10 @@ class AppRepository {
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final scope = await _activeWorkspaceScope();
     await _client.from('recurring_transactions').insert({
       'user_id': user.id,
+      'organization_id': scope.organizationId,
       'account_id': accountId,
       'category_id': categoryId,
       'kind': kind,
@@ -1833,30 +2972,39 @@ class AppRepository {
   }) async {
     final user = currentUser;
     if (user == null) return;
-    await _client
+    final scope = await _activeWorkspaceScope();
+    dynamic query = _client
         .from('recurring_transactions')
         .update({'is_active': isActive})
         .eq('id', recurringId)
         .eq('user_id', user.id);
+    query = _applyWorkspaceFilter(query, scope.organizationId);
+    await query;
   }
 
   Future<void> runDueRecurringTransactions() async {
     final user = currentUser;
     if (user == null) return;
+    final scope = await _activeWorkspaceScope();
     await _client.rpc(
       'run_due_recurring_transactions',
-      params: {'p_user_id': user.id},
+      params: {
+        'p_user_id': user.id,
+        'p_organization_id': scope.organizationId,
+      },
     );
   }
 
   Future<List<Map<String, dynamic>>> fetchBillReminders() async {
     final user = currentUser;
     if (user == null) return [];
-    final data = await _client
+    final scope = await _activeWorkspaceScope();
+    dynamic query = _client
         .from('bill_reminders')
         .select('*, accounts(name), categories(name)')
-        .eq('user_id', user.id)
-        .order('due_date');
+        .eq('user_id', user.id);
+    query = _applyWorkspaceFilter(query, scope.organizationId);
+    final data = await query.order('due_date');
     return List<Map<String, dynamic>>.from(data);
   }
 
@@ -1870,8 +3018,10 @@ class AppRepository {
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final scope = await _activeWorkspaceScope();
     await _client.from('bill_reminders').insert({
       'user_id': user.id,
+      'organization_id': scope.organizationId,
       'title': title,
       'amount': amount,
       'due_date': dueDate.toIso8601String().split('T').first,
@@ -1888,10 +3038,12 @@ class AppRepository {
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final scope = await _activeWorkspaceScope();
     await _client.rpc(
       'mark_bill_paid',
       params: {
         'p_user_id': user.id,
+        'p_organization_id': scope.organizationId,
         'p_bill_id': billId,
         'p_paid_on':
             (paidOn ?? DateTime.now()).toIso8601String().split('T').first,
@@ -1909,26 +3061,45 @@ class AppRepository {
     );
   }
 
+  /// Converts [amount] from [fromCurrency] into [toCurrency] using the same
+  /// FX source as transactions. Result is rounded to two decimals (minor units).
+  Future<double> convertAmountBetweenCurrencies({
+    required double amount,
+    required String fromCurrency,
+    required String toCurrency,
+  }) async {
+    final from = fromCurrency.toUpperCase();
+    final to = toCurrency.toUpperCase();
+    if (from == to) return amount;
+    final rate = await fetchExchangeRate(fromCurrency: from, toCurrency: to);
+    return (amount * rate * 100).round() / 100;
+  }
+
   Future<void> exchangeAccountCurrency({
     required String accountId,
     required String targetCurrency,
     required double rate,
   }) async {
+    final scope = await _activeWorkspaceScope();
     try {
       await _exchangeAccountCurrencyRemote(
         accountId: accountId,
         targetCurrency: targetCurrency,
         rate: rate,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_cacheKey('accounts'));
+      await _removeCachedKey(_accountsKey(scope: scope));
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opExchangeAccountCurrency, {
-        'account_id': accountId,
-        'target_currency': targetCurrency,
-        'rate': rate,
-      });
-      await _removeCachedKey(_cacheKey('accounts'));
+      await _enqueueOperation(
+        _opExchangeAccountCurrency,
+        await _payloadWithWorkspaceScope({
+          'account_id': accountId,
+          'target_currency': targetCurrency,
+          'rate': rate,
+        }, scope: scope),
+      );
+      await _removeCachedKey(_accountsKey(scope: scope));
     }
     _notifyDataChanged();
   }
@@ -1937,6 +3108,7 @@ class AppRepository {
     required String accountId,
     required String targetCurrency,
     required double rate,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return;
@@ -1944,6 +3116,7 @@ class AppRepository {
       'exchange_account_currency',
       params: {
         'p_user_id': user.id,
+        'p_organization_id': organizationId,
         'p_account_id': accountId,
         'p_target_currency': targetCurrency,
         'p_rate': rate,
@@ -1979,12 +3152,15 @@ class AppRepository {
     final user = currentUser;
     if (user == null) return [];
     await _syncPendingOperationsIfNeeded();
-    final key = _cacheKey('savings_goal_contributions');
+    final scope = await _activeWorkspaceScope();
+    final key = _savingsGoalContributionsKey(scope: scope);
     try {
-      final data = await _client
+      dynamic query = _client
           .from('savings_goal_contributions')
           .select()
-          .eq('user_id', user.id)
+          .eq('user_id', user.id);
+      query = _applyWorkspaceFilter(query, scope.organizationId);
+      final data = await query
           .order('created_at', ascending: false)
           .limit(1000);
       final mapped = List<Map<String, dynamic>>.from(data);
@@ -2002,13 +3178,13 @@ class AppRepository {
     final user = currentUser;
     if (user == null) return [];
     await _syncPendingOperationsIfNeeded();
-    final key = _cacheKey('loans');
+    final scope = await _activeWorkspaceScope();
+    final key = _loansKey(scope: scope);
     try {
-      final data = await _client
-          .from('loans')
-          .select()
-          .eq('user_id', user.id)
-          .order('created_at', ascending: false);
+      dynamic query =
+          _client.from('loans').select().eq('user_id', user.id);
+      query = _applyWorkspaceFilter(query, scope.organizationId);
+      final data = await query.order('created_at', ascending: false);
       final mapped = List<Map<String, dynamic>>.from(data);
       await _writeCachedList(key, mapped);
       return mapped;
@@ -2024,12 +3200,15 @@ class AppRepository {
     final user = currentUser;
     if (user == null) return [];
     await _syncPendingOperationsIfNeeded();
-    final key = _cacheKey('loan_payments');
+    final scope = await _activeWorkspaceScope();
+    final key = _loanPaymentsKey(scope: scope);
     try {
-      final data = await _client
+      dynamic query = _client
           .from('loan_payments')
           .select()
-          .eq('user_id', user.id)
+          .eq('user_id', user.id);
+      query = _applyWorkspaceFilter(query, scope.organizationId);
+      final data = await query
           .order('payment_date', ascending: false)
           .order('created_at', ascending: false)
           .limit(2000);
@@ -2048,47 +3227,135 @@ class AppRepository {
     required String personName,
     required double totalAmount,
     required String direction,
+    required String principalAccountId,
     String currencyCode = 'USD',
     String? note,
     DateTime? dueDate,
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final scope = await _activeWorkspaceScope();
+    final loansKey = _loansKey(scope: scope);
+    final accountsKey = _accountsKey(scope: scope);
+    final transactionsKey = _transactionsKey(scope: scope);
     final localId = _newLocalId('loan');
+    final trimmedNote = note?.trim().isEmpty == true ? null : note?.trim();
+    final person = personName.trim();
+    if (direction == 'owed_to_me') {
+      final accounts = await fetchAccounts();
+      Map<String, dynamic>? acct;
+      for (final a in accounts) {
+        if (a['id']?.toString() == principalAccountId) {
+          acct = a;
+          break;
+        }
+      }
+      if (acct != null) {
+        final bal = ((acct['current_balance'] as num?) ?? 0).toDouble();
+        if (bal < totalAmount) {
+          throw Exception(
+              'Insufficient balance in selected account for this loan');
+        }
+      }
+    }
     try {
       await _createLoanRemote(
-        personName: personName,
+        personName: person,
         totalAmount: totalAmount,
         direction: direction,
         currencyCode: currencyCode,
-        note: note,
+        principalAccountId: principalAccountId,
+        note: trimmedNote,
         dueDate: dueDate,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_cacheKey('loans'));
+      await _removeCachedKey(loansKey);
+      await _removeCachedKey(accountsKey);
+      await _removeCachedKey(transactionsKey);
+      await _clearTransactionsMonthCaches();
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opCreateLoan, {
-        'local_id': localId,
-        'person_name': personName,
-        'total_amount': totalAmount,
-        'direction': direction,
-        'currency_code': currencyCode,
-        'note': note,
-        'due_date': dueDate?.toIso8601String(),
-      });
-      final cached = await _readCachedList(_cacheKey('loans'));
+      if (direction == 'owed_to_me') {
+        final accountsCache = await _readCachedList(accountsKey);
+        Map<String, dynamic>? acct;
+        for (final a in accountsCache) {
+          if (a['id']?.toString() == principalAccountId) {
+            acct = a;
+            break;
+          }
+        }
+        if (acct != null) {
+          final bal = ((acct['current_balance'] as num?) ?? 0).toDouble();
+          if (bal < totalAmount) {
+            throw Exception(
+                'Insufficient balance in selected account for this loan');
+          }
+        }
+      }
+      await _enqueueOperation(
+        _opCreateLoan,
+        await _payloadWithWorkspaceScope({
+          'local_id': localId,
+          'person_name': person,
+          'total_amount': totalAmount,
+          'direction': direction,
+          'currency_code': currencyCode,
+          'principal_account_id': principalAccountId,
+          'note': trimmedNote,
+          'due_date': dueDate?.toIso8601String(),
+        }, scope: scope),
+      );
+      final cached = await _readCachedList(loansKey);
       cached.insert(0, {
         'id': localId,
         'user_id': user.id,
-        'person_name': personName.trim(),
+        'organization_id': scope.organizationId,
+        'person_name': person,
         'total_amount': totalAmount,
         'currency_code': currencyCode,
         'direction': direction,
-        'note': note?.trim().isEmpty == true ? null : note?.trim(),
+        'principal_account_id': principalAccountId,
+        'note': trimmedNote,
         'due_date': dueDate?.toIso8601String(),
         'created_at': DateTime.now().toIso8601String(),
       });
-      await _writeCachedList(_cacheKey('loans'), cached);
+      await _writeCachedList(loansKey, cached);
+
+      final principalKind = direction == 'owed_by_me' ? 'income' : 'expense';
+      final transactionNote = trimmedNote?.isNotEmpty == true
+          ? trimmedNote!
+          : direction == 'owed_by_me'
+              ? 'Loan received — I owe $person'
+              : 'Loan given — $person owes me';
+      final accounts = await _readCachedList(accountsKey);
+      for (final account in accounts) {
+        if (account['id']?.toString() != principalAccountId) continue;
+        final current = ((account['current_balance'] as num?) ?? 0).toDouble();
+        account['current_balance'] = principalKind == 'income'
+            ? current + totalAmount
+            : current - totalAmount;
+      }
+      await _writeCachedList(accountsKey, accounts);
+
+      final transactions = await _readCachedList(transactionsKey);
+      final principalTxDate = DateTime.now();
+      transactions.insert(0, {
+        'id': _newLocalId('loan_principal_tx'),
+        'user_id': user.id,
+        'organization_id': scope.organizationId,
+        'account_id': principalAccountId,
+        'category_id': null,
+        'kind': principalKind,
+        'amount': totalAmount,
+        'source_type': 'loan_principal',
+        'source_ref_id': localId,
+        'note': transactionNote,
+        'transaction_date': principalTxDate.toUtc().toIso8601String(),
+        'transfer_account_id': null,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      await _writeCachedList(transactionsKey, transactions);
+      await _clearTransactionsMonthCaches();
     }
     _notifyDataChanged();
   }
@@ -2102,6 +3369,10 @@ class AppRepository {
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final scope = await _activeWorkspaceScope();
+    final loanPaymentsKey = _loanPaymentsKey(scope: scope);
+    final accountsKey = _accountsKey(scope: scope);
+    final transactionsKey = _transactionsKey(scope: scope);
     final loans = await fetchLoans();
     final loan = loans.firstWhere(
       (row) => row['id']?.toString() == loanId,
@@ -2132,24 +3403,36 @@ class AppRepository {
         accountId: accountId,
         paymentDate: paymentDate,
         note: note,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_cacheKey('loan_payments'));
-      await _removeCachedKey(_cacheKey('accounts'));
-      await _removeCachedKey(_cacheKey('transactions'));
+      await _removeCachedKey(loanPaymentsKey);
+      await _removeCachedKey(accountsKey);
+      await _removeCachedKey(transactionsKey);
       await _clearTransactionsMonthCaches();
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opAddLoanPayment, {
-        'loan_id': loanId,
-        'amount': amount,
-        'account_id': accountId,
-        'payment_date': paymentDate.toIso8601String(),
-        'note': note,
-      });
-      final payments = await _readCachedList(_cacheKey('loan_payments'));
+      if (transactionKind == 'expense') {
+        final cachedBalance = await _cachedAccountBalance(accountId);
+        if (cachedBalance != null && cachedBalance < amount) {
+          throw Exception('Insufficient balance in selected account.');
+        }
+      }
+      await _enqueueOperation(
+        _opAddLoanPayment,
+        await _payloadWithWorkspaceScope({
+          'loan_id': loanId,
+          'amount': amount,
+          'account_id': accountId,
+          'payment_date': paymentDate.toIso8601String(),
+          'note': note,
+        }, scope: scope),
+      );
+      final payments = await _readCachedList(loanPaymentsKey);
+      final paymentLocalId = _newLocalId('loan_payment');
       payments.insert(0, {
-        'id': _newLocalId('loan_payment'),
+        'id': paymentLocalId,
         'user_id': user.id,
+        'organization_id': scope.organizationId,
         'loan_id': loanId,
         'account_id': accountId,
         'amount': amount,
@@ -2157,31 +3440,34 @@ class AppRepository {
         'note': note,
         'created_at': DateTime.now().toIso8601String(),
       });
-      await _writeCachedList(_cacheKey('loan_payments'), payments);
+      await _writeCachedList(loanPaymentsKey, payments);
 
-      final accounts = await _readCachedList(_cacheKey('accounts'));
+      final accounts = await _readCachedList(accountsKey);
       for (final account in accounts) {
         if (account['id']?.toString() != accountId) continue;
         final current = ((account['current_balance'] as num?) ?? 0).toDouble();
         account['current_balance'] =
             transactionKind == 'income' ? current + amount : current - amount;
       }
-      await _writeCachedList(_cacheKey('accounts'), accounts);
+      await _writeCachedList(accountsKey, accounts);
 
-      final transactions = await _readCachedList(_cacheKey('transactions'));
+      final transactions = await _readCachedList(transactionsKey);
       transactions.insert(0, {
         'id': _newLocalId('loan_tx'),
         'user_id': user.id,
+        'organization_id': scope.organizationId,
         'account_id': accountId,
         'category_id': null,
         'kind': transactionKind,
         'amount': amount,
+        'source_type': 'loan_payment',
+        'source_ref_id': paymentLocalId,
         'note': transactionNote,
-        'transaction_date': paymentDate.toIso8601String().split('T').first,
+        'transaction_date': paymentDate.toUtc().toIso8601String(),
         'transfer_account_id': null,
         'created_at': DateTime.now().toIso8601String(),
       });
-      await _writeCachedList(_cacheKey('transactions'), transactions);
+      await _writeCachedList(transactionsKey, transactions);
       await _clearTransactionsMonthCaches();
     }
     _notifyDataChanged();
@@ -2196,6 +3482,7 @@ class AppRepository {
     String? note,
     DateTime? dueDate,
   }) async {
+    final scope = await _activeWorkspaceScope();
     final paid = await _totalPaidForLoan(loanId);
     if (totalAmount < paid) {
       throw Exception(
@@ -2211,21 +3498,25 @@ class AppRepository {
         currencyCode: currencyCode,
         note: note,
         dueDate: dueDate,
+        organizationId: scope.organizationId,
       );
-      await _removeCachedKey(_cacheKey('loans'));
+      await _removeCachedKey(_loansKey(scope: scope));
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
-      await _enqueueOperation(_opUpdateLoan, {
-        'loan_id': loanId,
-        'person_name': personName,
-        'total_amount': totalAmount,
-        'direction': direction,
-        'currency_code': currencyCode,
-        'note': note,
-        'due_date': dueDate?.toIso8601String(),
-      });
+      await _enqueueOperation(
+        _opUpdateLoan,
+        await _payloadWithWorkspaceScope({
+          'loan_id': loanId,
+          'person_name': personName,
+          'total_amount': totalAmount,
+          'direction': direction,
+          'currency_code': currencyCode,
+          'note': note,
+          'due_date': dueDate?.toIso8601String(),
+        }, scope: scope),
+      );
 
-      final loans = await _readCachedList(_cacheKey('loans'));
+      final loans = await _readCachedList(_loansKey(scope: scope));
       for (final row in loans) {
         if (row['id']?.toString() != loanId) continue;
         row['person_name'] = personName;
@@ -2235,7 +3526,7 @@ class AppRepository {
         row['note'] = note?.trim().isEmpty == true ? null : note?.trim();
         row['due_date'] = dueDate?.toIso8601String();
       }
-      await _writeCachedList(_cacheKey('loans'), loans);
+      await _writeCachedList(_loansKey(scope: scope), loans);
     }
     _notifyDataChanged();
   }
@@ -2255,25 +3546,28 @@ class AppRepository {
     required double totalAmount,
     required String direction,
     required String currencyCode,
+    required String principalAccountId,
     String? note,
     DateTime? dueDate,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return '';
-    final inserted = await _client
-        .from('loans')
-        .insert({
-          'user_id': user.id,
-          'person_name': personName.trim(),
-          'total_amount': totalAmount,
-          'currency_code': currencyCode,
-          'direction': direction,
-          'note': note?.trim().isEmpty == true ? null : note?.trim(),
-          'due_date': dueDate?.toIso8601String().split('T').first,
-        })
-        .select('id')
-        .single();
-    return (inserted['id'] ?? '').toString();
+    final inserted = await _client.rpc(
+      'create_loan',
+      params: {
+        'p_user_id': user.id,
+        'p_organization_id': organizationId,
+        'p_person_name': personName.trim(),
+        'p_total_amount': totalAmount,
+        'p_direction': direction,
+        'p_currency_code': currencyCode,
+        'p_principal_account_id': principalAccountId,
+        'p_due_date': dueDate?.toIso8601String().split('T').first,
+        'p_note': note?.trim().isEmpty == true ? null : note?.trim(),
+      },
+    );
+    return inserted?.toString() ?? '';
   }
 
   Future<void> _addLoanPaymentRemote({
@@ -2282,6 +3576,7 @@ class AppRepository {
     required String accountId,
     required DateTime paymentDate,
     String? note,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return;
@@ -2289,10 +3584,20 @@ class AppRepository {
       'record_loan_payment',
       params: {
         'p_user_id': user.id,
+        'p_organization_id': organizationId,
         'p_loan_id': loanId,
         'p_account_id': accountId,
         'p_amount': amount,
-        'p_payment_date': paymentDate.toIso8601String().split('T').first,
+        'p_payment_date': DateTime.utc(
+          paymentDate.year,
+          paymentDate.month,
+          paymentDate.day,
+          paymentDate.hour,
+          paymentDate.minute,
+          paymentDate.second,
+          paymentDate.millisecond,
+          paymentDate.microsecond,
+        ).toIso8601String(),
         'p_note': note?.trim().isEmpty == true ? null : note?.trim(),
       },
     );
@@ -2306,6 +3611,7 @@ class AppRepository {
     required String currencyCode,
     String? note,
     DateTime? dueDate,
+    String? organizationId,
   }) async {
     final user = currentUser;
     if (user == null) return;
@@ -2313,6 +3619,7 @@ class AppRepository {
       'update_loan',
       params: {
         'p_user_id': user.id,
+        'p_organization_id': organizationId,
         'p_loan_id': loanId,
         'p_person_name': personName.trim(),
         'p_total_amount': totalAmount,
@@ -2325,20 +3632,20 @@ class AppRepository {
   }
 
   Future<void> deleteLoan(String loanId) async {
-    final user = currentUser;
-    if (user == null) return;
-    await _client
-        .from('loan_payments')
-        .delete()
-        .eq('loan_id', loanId)
-        .eq('user_id', user.id);
-    await _client
-        .from('loans')
-        .delete()
-        .eq('id', loanId)
-        .eq('user_id', user.id);
-    await _removeCachedKey(_cacheKey('loans'));
-    await _removeCachedKey(_cacheKey('loan_payments'));
+    if (currentUser == null) return;
+    final scope = await _activeWorkspaceScope();
+    await _client.rpc(
+      'delete_loan_cascade',
+      params: {
+        'p_loan_id': loanId,
+        'p_organization_id': scope.organizationId,
+      },
+    );
+    await _removeCachedKey(_accountsKey(scope: scope));
+    await _removeCachedKey(_loansKey(scope: scope));
+    await _removeCachedKey(_loanPaymentsKey(scope: scope));
+    await _removeCachedKey(_transactionsKey(scope: scope));
+    await _clearTransactionsMonthCaches();
     _notifyDataChanged();
   }
 }
@@ -2374,4 +3681,33 @@ class _PendingOperation {
       createdAtIso: (json['created_at'] ?? '').toString(),
     );
   }
+}
+
+class _WorkspaceScope {
+  const _WorkspaceScope._({
+    required this.kind,
+    this.organizationId,
+  });
+
+  const _WorkspaceScope.personal()
+      : this._(
+          kind: 'personal',
+        );
+
+  const _WorkspaceScope.organization(String organizationId)
+      : this._(
+          kind: 'organization',
+          organizationId: organizationId,
+        );
+
+  final String kind;
+  final String? organizationId;
+
+  bool get isOrganization =>
+      kind == 'organization' &&
+      organizationId != null &&
+      organizationId!.trim().isNotEmpty;
+
+  String get cacheSuffix =>
+      isOrganization ? 'org_${organizationId!.trim()}' : 'personal';
 }
