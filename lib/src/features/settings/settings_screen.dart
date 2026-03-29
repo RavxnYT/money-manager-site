@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../core/ads/support_rewarded_ad_service.dart';
 import '../../core/billing/business_access.dart';
+import '../../core/config/business_features_config.dart';
+import '../../core/billing/business_entitlement_service.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/app_page_scaffold.dart';
@@ -9,7 +11,6 @@ import '../../data/app_repository.dart';
 import '../accounts/accounts_screen.dart';
 import '../categories/categories_screen.dart';
 import '../security/security_screen.dart';
-import 'business_mode_flow.dart';
 import 'workspaces_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -30,7 +31,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _supportCountTotal = 0;
   BusinessAccessState _businessAccess = const BusinessAccessState();
   String _activeWorkspaceLabel = 'Personal';
-  bool _hasBusinessWorkspaces = false;
 
   @override
   void initState() {
@@ -47,17 +47,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ? {'today': 0, 'total': 0}
         : await widget.repository.fetchSupportStats();
     var activeWorkspaceLabel = 'Personal';
-    var hasBusinessWorkspaces = false;
     try {
-      final workspaces = await widget.repository.fetchWorkspaces();
-      hasBusinessWorkspaces = workspaces.any(
-        (row) => (row['kind'] ?? '').toString().toLowerCase() == 'organization',
-      );
-      final activeWorkspace = workspaces.cast<Map<String, dynamic>?>().firstWhere(
-            (row) => (row?['is_active'] as bool?) ?? false,
-            orElse: () => null,
-          );
-      activeWorkspaceLabel = (activeWorkspace?['label'] ?? 'Personal').toString();
+      if (BusinessFeaturesConfig.isEnabled) {
+        final workspaces = await widget.repository.fetchWorkspaces();
+        final activeWorkspace =
+            workspaces.cast<Map<String, dynamic>?>().firstWhere(
+                  (row) => (row?['is_active'] as bool?) ?? false,
+                  orElse: () => null,
+                );
+        activeWorkspaceLabel =
+            (activeWorkspace?['label'] ?? 'Personal').toString();
+      }
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -72,7 +72,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _supportCountTotal = supportStats['total'] ?? 0;
       _businessAccess = businessAccess;
       _activeWorkspaceLabel = activeWorkspaceLabel;
-      _hasBusinessWorkspaces = hasBusinessWorkspaces;
     });
     if (!businessAccess.shouldHideSupportAd) {
       SupportRewardedAdService.instance.load();
@@ -241,44 +240,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  String get _businessToggleSubtitle {
-    if (_businessAccess.businessModeEnabled) {
-      return 'Active workspace: $_activeWorkspaceLabel';
-    }
-    if (_businessAccess.entitlementActive && !_hasBusinessWorkspaces) {
-      return 'Turn this on to create your first business workspace.';
-    }
-    if (_businessAccess.entitlementActive) {
-      return 'Turn this on to jump back into your business workspace.';
-    }
-    return 'Requires Business access. ${_businessAccess.statusLabel}';
-  }
-
-  Future<void> _toggleBusinessMode(bool enabled) async {
+  Future<void> _onBuyBusinessAccess() async {
     if (_businessToggleBusy) return;
     setState(() => _businessToggleBusy = true);
     try {
-      final changed = enabled
-          ? await BusinessModeFlow.enableBusinessMode(
-              context: context,
-              repository: widget.repository,
-            )
-          : await BusinessModeFlow.disableBusinessMode(
-              repository: widget.repository,
-            );
+      await BusinessEntitlementService.instance.presentPaywallForExplicitUpgrade();
+      await widget.repository.refreshBusinessEntitlement();
       if (!mounted) return;
       await _loadSettingsData();
-      if (changed) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              enabled
-                  ? 'Business mode is now on.'
-                  : 'Business mode is off. Personal workspace is active.',
-            ),
-          ),
-        );
-      }
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -292,6 +261,184 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Widget _buildBusinessAccessCard(BuildContext context) {
+    const accent = Color(0xFF3BD188);
+    if (_businessAccess.entitlementActive) {
+      return Card(
+        clipBehavior: Clip.antiAlias,
+        margin: EdgeInsets.zero,
+        child: InkWell(
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => WorkspacesScreen(repository: widget.repository),
+              ),
+            ).then((_) => _loadSettingsData());
+          },
+          child: Ink(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  accent.withValues(alpha: 0.22),
+                  const Color(0xFF0B1815),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: accent.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: accent.withValues(alpha: 0.4)),
+                        ),
+                        child: const Icon(
+                          Icons.workspace_premium_rounded,
+                          color: accent,
+                          size: 26,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Business Pro',
+                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white,
+                                  ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Subscription active — separate books, categories, and reports for each business.',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.78),
+                                height: 1.35,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(
+                        Icons.verified_rounded,
+                        color: accent.withValues(alpha: 0.95),
+                        size: 26,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.22),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.apartment_rounded,
+                          size: 18,
+                          color: Colors.white.withValues(alpha: 0.85),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Active: $_activeWorkspaceLabel · Tap to open Workspaces',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.88),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          Icons.chevron_right_rounded,
+                          color: Colors.white.withValues(alpha: 0.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.business_center_outlined,
+                  color: Colors.white.withValues(alpha: 0.9),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Business workspaces',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _businessAccess.billingAvailable
+                  ? 'Subscribe to run separate ledgers for each business — accounts, categories, transactions, and reports stay isolated from your personal finances.'
+                  : 'Business add-on requires billing to be configured. ${_businessAccess.statusLabel}',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.72),
+                height: 1.35,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: (!_businessAccess.billingAvailable || _businessToggleBusy)
+                    ? null
+                    : _onBuyBusinessAccess,
+                icon: _businessToggleBusy
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.shopping_bag_outlined),
+                label: Text(
+                  _businessToggleBusy ? 'Opening…' : 'Get Business Pro',
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AppPageScaffold(
@@ -300,15 +447,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
         Text('Settings', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 10),
-        Card(
-          child: SwitchListTile(
-            secondary: const Icon(Icons.workspace_premium_outlined),
-            value: _businessAccess.businessModeEnabled,
-            onChanged: _businessToggleBusy ? null : _toggleBusinessMode,
-            title: const Text('Business Mode'),
-            subtitle: Text(_businessToggleSubtitle),
-          ),
-        ),
+        if (BusinessFeaturesConfig.isEnabled)
+          _buildBusinessAccessCard(context),
         Card(
           child: ListTile(
             leading: const Icon(Icons.currency_exchange_outlined),
@@ -364,7 +504,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
         ),
-        if (_businessAccess.entitlementActive)
+        if (BusinessFeaturesConfig.isEnabled &&
+            _businessAccess.entitlementActive)
           Card(
             child: ListTile(
               leading: const Icon(Icons.apartment_rounded),

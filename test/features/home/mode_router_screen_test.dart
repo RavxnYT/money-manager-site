@@ -106,6 +106,8 @@ void main() {
     );
 
     await tester.pump();
+    // ModeRouter debounces repository.dataChanges to avoid shell swap races.
+    await tester.pump(const Duration(milliseconds: 220));
     await tester.pumpAndSettle();
 
     expect(find.text('Business shell'), findsOneWidget);

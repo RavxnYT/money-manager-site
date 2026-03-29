@@ -4,6 +4,8 @@ import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../config/business_features_config.dart';
+
 const businessProEntitlementId = 'Money Manager Pro';
 const businessProOfferingId = 'default';
 const businessProMonthlyPackageId = 'monthly';
@@ -107,6 +109,16 @@ class BusinessEntitlementService extends ChangeNotifier {
       return;
     }
 
+    if (!BusinessFeaturesConfig.isEnabled) {
+      _configured = false;
+      _configurationError = null;
+      _customerInfo = null;
+      _offerings = null;
+      _appUserId = null;
+      notifyListeners();
+      return;
+    }
+
     if (!_supportsRevenueCat) {
       _configurationError = 'RevenueCat billing is available on Android and iOS only.';
       notifyListeners();
@@ -146,6 +158,11 @@ class BusinessEntitlementService extends ChangeNotifier {
 
   Future<void> syncUser(User? user) async {
     if (_forceBusinessPro) {
+      notifyListeners();
+      return;
+    }
+
+    if (!BusinessFeaturesConfig.isEnabled) {
       notifyListeners();
       return;
     }
@@ -203,6 +220,7 @@ class BusinessEntitlementService extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (!BusinessFeaturesConfig.isEnabled) return;
     if (!_configured) return;
 
     try {
@@ -222,6 +240,9 @@ class BusinessEntitlementService extends ChangeNotifier {
   Future<PaywallResult> presentPaywallIfNeeded() async {
     await initialize(user: Supabase.instance.client.auth.currentUser);
     if (_forceBusinessPro) {
+      return PaywallResult.notPresented;
+    }
+    if (!BusinessFeaturesConfig.isEnabled) {
       return PaywallResult.notPresented;
     }
     if (!_configured) {
@@ -245,6 +266,9 @@ class BusinessEntitlementService extends ChangeNotifier {
   Future<PaywallResult> presentPaywallForExplicitUpgrade() async {
     await initialize(user: Supabase.instance.client.auth.currentUser);
     if (_forceBusinessPro) {
+      return PaywallResult.notPresented;
+    }
+    if (!BusinessFeaturesConfig.isEnabled) {
       return PaywallResult.notPresented;
     }
     if (!_configured) {
@@ -274,6 +298,10 @@ class BusinessEntitlementService extends ChangeNotifier {
       notifyListeners();
       return null;
     }
+    if (!BusinessFeaturesConfig.isEnabled) {
+      notifyListeners();
+      return null;
+    }
     if (!_configured) {
       throw StateError(
         _configurationError ?? 'RevenueCat billing is not configured.',
@@ -290,6 +318,7 @@ class BusinessEntitlementService extends ChangeNotifier {
   Future<void> presentCustomerCenter() async {
     await initialize(user: Supabase.instance.client.auth.currentUser);
     if (_forceBusinessPro) return;
+    if (!BusinessFeaturesConfig.isEnabled) return;
     if (!_configured) {
       throw StateError(
         _configurationError ?? 'RevenueCat billing is not configured.',

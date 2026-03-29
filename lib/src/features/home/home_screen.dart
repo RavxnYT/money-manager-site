@@ -1,7 +1,10 @@
-import 'package:flutter/material.dart';
 import 'dart:async';
 
+import 'package:flutter/material.dart';
+
+import '../../core/billing/business_access.dart';
 import '../../core/currency/currency_utils.dart';
+import '../../core/config/business_features_config.dart';
 import '../../core/network/network_status_service.dart';
 import '../../core/ui/app_design_tokens.dart';
 import '../../data/app_repository.dart';
@@ -9,6 +12,7 @@ import '../dashboard/dashboard_screen.dart';
 import '../loans/loans_screen.dart';
 import '../reports/reports_screen.dart';
 import '../settings/settings_screen.dart';
+import '../settings/workspaces_screen.dart';
 import '../savings/savings_screen.dart';
 import '../transactions/transactions_screen.dart';
 
@@ -28,7 +32,9 @@ class _HomeScreenState extends State<HomeScreen> {
   late final PageController _pageController;
   StreamSubscription<bool>? _networkSubscription;
   StreamSubscription<int>? _dataChangesSubscription;
-  static const _titles = [
+  BusinessAccessState _businessAccess = const BusinessAccessState();
+
+  static const _titlesPersonal = [
     'Overview',
     'Transactions',
     'Reports',
@@ -37,6 +43,24 @@ class _HomeScreenState extends State<HomeScreen> {
     'Settings',
   ];
 
+  static const _titlesWithWorkspaces = [
+    'Overview',
+    'Transactions',
+    'Reports',
+    'Savings',
+    'Loans',
+    'Workspaces',
+    'Settings',
+  ];
+
+  bool get _showWorkspaceTab =>
+      BusinessFeaturesConfig.isEnabled && _businessAccess.entitlementActive;
+
+  int get _tabCount => _showWorkspaceTab ? 7 : 6;
+
+  List<String> get _tabTitles =>
+      _showWorkspaceTab ? _titlesWithWorkspaces : _titlesPersonal;
+
   @override
   void initState() {
     super.initState();
@@ -44,11 +68,13 @@ class _HomeScreenState extends State<HomeScreen> {
     _initNetworkState();
     _dataChangesSubscription = widget.repository.dataChanges.listen((_) {
       if (!mounted) return;
-      setState(() {
-        _dataRevision++;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(_refreshTabsFromRepository());
       });
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_refreshTabsFromRepository());
       widget.repository.syncPendingOperations();
       widget.repository.ensureDefaultCategories();
       _maybeAskDefaultCurrency();
@@ -146,6 +172,36 @@ class _HomeScreenState extends State<HomeScreen> {
     _networkSubscription?.cancel();
     _dataChangesSubscription?.cancel();
     super.dispose();
+  }
+
+  Future<void> _refreshTabsFromRepository() async {
+    final access = await widget.repository.fetchBusinessAccessState();
+    if (!mounted) return;
+    final hadWorkspace = _businessAccess.entitlementActive;
+    final hasWorkspace = access.entitlementActive;
+    setState(() {
+      _dataRevision++;
+      _businessAccess = access;
+      if (hadWorkspace != hasWorkspace) {
+        if (hasWorkspace && !hadWorkspace) {
+          if (_currentIndex >= 5) _currentIndex++;
+        } else if (!hasWorkspace && hadWorkspace) {
+          if (_currentIndex == 5) {
+            _currentIndex = 4;
+          } else if (_currentIndex >= 6) {
+            _currentIndex--;
+          }
+        }
+      }
+      _currentIndex = _currentIndex.clamp(0, _tabCount - 1);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_pageController.hasClients) return;
+      final safe = _currentIndex.clamp(0, _tabCount - 1);
+      if (_pageController.page?.round() != safe) {
+        _pageController.jumpToPage(safe);
+      }
+    });
   }
 
   Future<void> _onTabTapped(int index) async {
@@ -254,6 +310,12 @@ class _HomeScreenState extends State<HomeScreen> {
         key: ValueKey('loans-$_dataRevision'),
         repository: widget.repository,
       ),
+      if (_showWorkspaceTab)
+        WorkspacesScreen(
+          key: ValueKey('workspaces-personal-$_dataRevision'),
+          repository: widget.repository,
+          showAppBar: false,
+        ),
       SettingsScreen(
         key: ValueKey('settings-$_dataRevision'),
         repository: widget.repository,
@@ -265,12 +327,12 @@ class _HomeScreenState extends State<HomeScreen> {
         title: AnimatedSwitcher(
           duration: AppDesignTokens.quick,
           child: Column(
-            key: ValueKey(_titles[_currentIndex]),
+            key: ValueKey(_tabTitles[_currentIndex]),
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text('Money Management'),
               Text(
-                _titles[_currentIndex],
+                _tabTitles[_currentIndex],
                 style: Theme.of(context)
                     .textTheme
                     .bodySmall
@@ -349,7 +411,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: PageView.builder(
               controller: _pageController,
-              itemCount: pages.length,
+              itemCount: _tabCount,
               onPageChanged: (value) {
                 if (!mounted) return;
                 setState(() => _currentIndex = value);
@@ -408,8 +470,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 iconFilled: Icons.people,
                 label: 'Loans',
               ),
+              if (_showWorkspaceTab)
+                _buildNavItem(
+                  index: 5,
+                  iconOutlined: Icons.apartment_outlined,
+                  iconFilled: Icons.apartment,
+                  label: 'Workspaces',
+                ),
               _buildNavItem(
-                index: 5,
+                index: _showWorkspaceTab ? 6 : 5,
                 iconOutlined: Icons.settings_outlined,
                 iconFilled: Icons.settings,
                 label: 'Settings',

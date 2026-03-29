@@ -2,6 +2,8 @@
 
 create extension if not exists "uuid-ossp";
 
+create extension if not exists pgcrypto with schema extensions;
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   full_name text,
@@ -2516,7 +2518,11 @@ begin
     v_base_slug := 'business';
   end if;
 
-  v_slug := v_base_slug || '-' || substr(replace(uuid_generate_v4()::text, '-', ''), 1, 8);
+  v_slug := v_base_slug || '-' || substr(
+    replace(extensions.gen_random_uuid()::text, '-', ''),
+    1,
+    8
+  );
 
   insert into public.organizations (
     owner_user_id,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/billing/business_access.dart';
+import '../../core/config/business_features_config.dart';
 import '../../core/categories/category_branding.dart';
 import '../../core/categories/category_icon_utils.dart';
 import '../../core/friendly_error.dart';
@@ -163,7 +164,9 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                   ),
                 ] else ...[
                   Text(
-                    'Business Pro unlocks custom category icons and colors.',
+                    BusinessFeaturesConfig.isEnabled
+                        ? 'Business Pro unlocks custom category icons and colors.'
+                        : 'Custom icons and colors are not available in this version of the app.',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.72),
                     ),
@@ -318,7 +321,8 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
       body: AppPageScaffold(
         child: Column(
           children: [
-            if (!_businessAccess.canCustomizeCategoryBranding)
+            if (BusinessFeaturesConfig.isEnabled &&
+                !_businessAccess.canCustomizeCategoryBranding)
               GlassPanel(
                 margin: const EdgeInsets.fromLTRB(2, 12, 2, 0),
                 child: ListTile(

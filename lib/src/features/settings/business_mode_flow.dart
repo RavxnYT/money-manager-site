@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../core/billing/business_entitlement_service.dart';
+import '../../core/config/business_features_config.dart';
+import '../../core/currency/organization_currency_prompt.dart';
 import '../../data/app_repository.dart';
 
 class BusinessModeFlow {
@@ -10,6 +12,7 @@ class BusinessModeFlow {
     required BuildContext context,
     required AppRepository repository,
   }) async {
+    if (!BusinessFeaturesConfig.isEnabled) return false;
     final entitled = await _ensureEntitled(
       context: context,
       repository: repository,
@@ -66,6 +69,7 @@ class BusinessModeFlow {
     required AppRepository repository,
     required String organizationId,
   }) async {
+    if (!BusinessFeaturesConfig.isEnabled) return false;
     final entitled = await _ensureEntitled(
       context: context,
       repository: repository,
@@ -77,6 +81,21 @@ class BusinessModeFlow {
       organizationId: organizationId,
     );
     await repository.setBusinessModeEnabled(true);
+    if (!context.mounted) return true;
+    final workspaces = await repository.fetchWorkspaces();
+    final row = workspaces.cast<Map<String, dynamic>?>().firstWhere(
+          (w) => w?['organization_id']?.toString() == organizationId,
+          orElse: () => null,
+        );
+    if (row != null &&
+        ((row['has_selected_currency'] as bool?) ?? false) != true &&
+        context.mounted) {
+      await promptChooseOrganizationCurrency(
+        context: context,
+        repository: repository,
+        organizationId: organizationId,
+      );
+    }
     return true;
   }
 
@@ -84,6 +103,7 @@ class BusinessModeFlow {
     required BuildContext context,
     required AppRepository repository,
   }) async {
+    if (!BusinessFeaturesConfig.isEnabled) return false;
     final entitled = await _ensureEntitled(
       context: context,
       repository: repository,
@@ -93,7 +113,13 @@ class BusinessModeFlow {
     final name = await promptForBusinessName(context: context);
     if (!context.mounted || name == null) return false;
 
-    await repository.createBusinessWorkspace(name: name);
+    final organizationId = await repository.createBusinessWorkspace(name: name);
+    if (!context.mounted || organizationId.isEmpty) return false;
+    await promptChooseOrganizationCurrency(
+      context: context,
+      repository: repository,
+      organizationId: organizationId,
+    );
     return true;
   }
 
@@ -142,7 +168,12 @@ class BusinessModeFlow {
         ),
       ),
     );
-    controller.dispose();
+    // The route (and [TextField]) can rebuild once more after pop while the
+    // IME closes; disposing immediately triggers "used after disposed" and
+    // cascades to InheritedWidget / build-scope asserts.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      controller.dispose();
+    });
     return result;
   }
 

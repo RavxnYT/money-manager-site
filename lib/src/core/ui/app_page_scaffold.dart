@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_design_tokens.dart';
+import 'workspace_ui_theme.dart';
 
 class AppPageScaffold extends StatelessWidget {
   const AppPageScaffold({
@@ -14,8 +15,11 @@ class AppPageScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final workspace = Theme.of(context).extension<WorkspaceUiTheme>();
+    final gradient =
+        workspace?.pageGradient ?? AppDesignTokens.pageGradient;
     return Container(
-      decoration: const BoxDecoration(gradient: AppDesignTokens.pageGradient),
+      decoration: BoxDecoration(gradient: gradient),
       child: Padding(
         padding: padding,
         child: child,

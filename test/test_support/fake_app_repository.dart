@@ -111,7 +111,9 @@ class FakeAppRepository extends AppRepository {
   }
 
   @override
-  Future<Map<String, dynamic>?> fetchProfile() async {
+  Future<Map<String, dynamic>?> fetchProfile({
+    bool forceRefresh = false,
+  }) async {
     return Map<String, dynamic>.from(_profile);
   }
 
@@ -122,6 +124,20 @@ class FakeAppRepository extends AppRepository {
 
   @override
   Future<String> fetchUserCurrencyCode() async {
+    final kind =
+        (_profile['active_workspace_kind'] ?? 'personal').toString();
+    if (kind == 'organization') {
+      final oid =
+          _profile['active_workspace_organization_id']?.toString();
+      final row = _workspaces.cast<Map<String, dynamic>?>().firstWhere(
+            (w) => w?['organization_id']?.toString() == oid,
+            orElse: () => null,
+          );
+      if (row != null &&
+          ((row['has_selected_currency'] as bool?) ?? false) == true) {
+        return (row['currency_code'] ?? userCurrencyCode).toString();
+      }
+    }
     return userCurrencyCode;
   }
 
@@ -170,6 +186,12 @@ class FakeAppRepository extends AppRepository {
   Future<String> createBusinessWorkspace({
     required String name,
   }) async {
+    final sortOrder = _workspaces
+        .where(
+          (row) =>
+              (row['kind'] ?? '').toString().toLowerCase() == 'organization',
+        )
+        .length;
     final organizationId = 'org-${_workspaces.length}';
     _workspaces = [
       ..._workspaces.map((row) => {...row, 'is_active': false}),
@@ -179,6 +201,9 @@ class FakeAppRepository extends AppRepository {
         'label': name,
         'role': 'owner',
         'is_active': true,
+        'sort_order': sortOrder,
+        'currency_code': 'USD',
+        'has_selected_currency': false,
       },
     ];
     seedMode(
@@ -187,6 +212,106 @@ class FakeAppRepository extends AppRepository {
       activeWorkspaceOrganizationId: organizationId,
     );
     return organizationId;
+  }
+
+  @override
+  Future<void> reorderWorkspaceOrganizations({
+    required List<String> orderedOrganizationIds,
+  }) async {
+    if (orderedOrganizationIds.isEmpty) return;
+    final personal = _workspaces.firstWhere(
+      (row) => (row['kind'] ?? '').toString().toLowerCase() == 'personal',
+      orElse: () => <String, dynamic>{'kind': 'personal', 'label': 'Personal'},
+    );
+    final orgs = _workspaces
+        .where(
+          (row) =>
+              (row['kind'] ?? '').toString().toLowerCase() == 'organization',
+        )
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+    final byId = {
+      for (final o in orgs) o['organization_id']?.toString() ?? '': o,
+    };
+    final reordered = <Map<String, dynamic>>[];
+    for (var i = 0; i < orderedOrganizationIds.length; i++) {
+      final id = orderedOrganizationIds[i];
+      final row = byId[id];
+      if (row != null) {
+        reordered.add({
+          ...row,
+          'sort_order': i,
+        });
+      }
+    }
+    for (final o in orgs) {
+      final id = o['organization_id']?.toString() ?? '';
+      if (id.isNotEmpty && !orderedOrganizationIds.contains(id)) {
+        reordered.add({
+          ...o,
+          'sort_order': reordered.length,
+        });
+      }
+    }
+    _workspaces = [personal, ...reordered];
+    emitDataChange();
+  }
+
+  @override
+  Future<void> updateOrganizationName({
+    required String organizationId,
+    required String name,
+  }) async {
+    _workspaces = _workspaces
+        .map(
+          (row) => row['organization_id']?.toString() == organizationId
+              ? {...row, 'label': name.trim()}
+              : row,
+        )
+        .toList();
+    emitDataChange();
+  }
+
+  @override
+  Future<void> updateOrganizationCurrency({
+    required String organizationId,
+    required String currencyCode,
+  }) async {
+    _workspaces = _workspaces
+        .map(
+          (row) => row['organization_id']?.toString() == organizationId
+              ? {
+                  ...row,
+                  'currency_code': currencyCode.trim().toUpperCase(),
+                  'has_selected_currency': true,
+                }
+              : row,
+        )
+        .toList();
+    emitDataChange();
+  }
+
+  @override
+  Future<void> deleteOrganization({
+    required String organizationId,
+  }) async {
+    final kind =
+        (_profile['active_workspace_kind'] ?? 'personal').toString();
+    final activeId =
+        _profile['active_workspace_organization_id']?.toString();
+    if (kind == 'organization' && activeId == organizationId) {
+      seedMode(
+        businessModeEnabled: false,
+        activeWorkspaceKind: 'personal',
+        activeWorkspaceOrganizationId: null,
+      );
+    }
+    _workspaces = _workspaces
+        .where(
+          (row) => row['organization_id']?.toString() != organizationId,
+        )
+        .toList();
+    emitDataChange();
   }
 
   @override

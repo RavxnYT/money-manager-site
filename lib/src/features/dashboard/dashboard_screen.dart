@@ -43,70 +43,85 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<_DashboardData> _loadData() async {
-    final accounts = await widget.repository.fetchAccounts();
-    final monthTx =
-        await widget.repository.fetchTransactionsForMonth(DateTime.now());
-    final goals = await widget.repository.fetchSavingsGoals();
+    final month = DateTime.now();
+    final accountsFuture = widget.repository.fetchAccounts();
+    final monthTxFuture = widget.repository.fetchTransactionsForMonth(month);
+    final goalsFuture = widget.repository.fetchSavingsGoals();
+    final displayCurrencyFuture = widget.repository.fetchUserCurrencyCode();
+
+    final accounts = await accountsFuture;
+    final monthTx = await monthTxFuture;
+    final goals = await goalsFuture;
     final displayCurrency =
-        (await widget.repository.fetchUserCurrencyCode()).toUpperCase();
+        (await displayCurrencyFuture).toUpperCase();
 
-    double totalBalance = 0;
-    for (final account in accounts) {
-      final balance = ((account['current_balance'] as num?) ?? 0).toDouble();
-      final sourceCurrency =
-          (account['currency_code'] ?? displayCurrency).toString();
-      final convertedForTotal = await _convertToTargetCurrency(
-        amount: balance,
-        sourceCurrencyCode: sourceCurrency,
-        targetCurrencyCode: displayCurrency,
-      );
-      final converted = await widget.repository.convertAmountForDisplay(
-        amount: balance,
-        sourceCurrencyCode: sourceCurrency,
-      );
-      account['display_balance'] = converted;
-      account['display_currency'] = await widget.repository.displayCurrencyFor(
-        sourceCurrencyCode: sourceCurrency,
-      );
-      totalBalance += convertedForTotal;
+    final accountTotals = await Future.wait(
+      accounts.map((account) async {
+        final balance = ((account['current_balance'] as num?) ?? 0).toDouble();
+        final sourceCurrency =
+            (account['currency_code'] ?? displayCurrency).toString();
+        final convertedForTotal = await _convertToTargetCurrency(
+          amount: balance,
+          sourceCurrencyCode: sourceCurrency,
+          targetCurrencyCode: displayCurrency,
+        );
+        final converted = await widget.repository.convertAmountForDisplay(
+          amount: balance,
+          sourceCurrencyCode: sourceCurrency,
+        );
+        account['display_balance'] = converted;
+        account['display_currency'] = await widget.repository.displayCurrencyFor(
+          sourceCurrencyCode: sourceCurrency,
+        );
+        return convertedForTotal;
+      }),
+    );
+    var totalBalance = accountTotals.fold<double>(0, (a, b) => a + b);
+
+    final monthParts = await Future.wait(
+      monthTx.map((tx) async {
+        final kind = (tx['kind'] ?? '').toString();
+        if (kind != 'income' && kind != 'expense') {
+          return (0.0, 0.0);
+        }
+        final amount = ((tx['amount'] as num?) ?? 0).toDouble();
+        final account = tx['account'];
+        final sourceCurrency = account is Map
+            ? (Map<String, dynamic>.from(account)['currency_code'] ??
+                    displayCurrency)
+                .toString()
+            : displayCurrency;
+        final convertedForSummary = await _convertToTargetCurrency(
+          amount: amount,
+          sourceCurrencyCode: sourceCurrency,
+          targetCurrencyCode: displayCurrency,
+        );
+        if (kind == 'income') {
+          return (convertedForSummary, 0.0);
+        }
+        return (0.0, convertedForSummary);
+      }),
+    );
+    var incomeMonth = 0.0;
+    var expenseMonth = 0.0;
+    for (final p in monthParts) {
+      incomeMonth += p.$1;
+      expenseMonth += p.$2;
     }
 
-    double incomeMonth = 0;
-    double expenseMonth = 0;
-    for (final tx in monthTx) {
-      final kind = (tx['kind'] ?? '').toString();
-      if (kind != 'income' && kind != 'expense') continue;
-      final amount = ((tx['amount'] as num?) ?? 0).toDouble();
-      final account = tx['account'];
-      final sourceCurrency = account is Map
-          ? (Map<String, dynamic>.from(account)['currency_code'] ??
-                  displayCurrency)
-              .toString()
-          : displayCurrency;
-      final convertedForSummary = await _convertToTargetCurrency(
-        amount: amount,
-        sourceCurrencyCode: sourceCurrency,
-        targetCurrencyCode: displayCurrency,
-      );
-      if (kind == 'income') {
-        incomeMonth += convertedForSummary;
-      } else {
-        expenseMonth += convertedForSummary;
-      }
-    }
-
-    var savingsTotal = 0.0;
-    for (final item in goals) {
-      final current = ((item['current_amount'] as num?) ?? 0).toDouble();
-      final goalCurrency =
-          (item['currency_code'] ?? displayCurrency).toString().toUpperCase();
-      final converted = await _convertToTargetCurrency(
-        amount: current,
-        sourceCurrencyCode: goalCurrency,
-        targetCurrencyCode: displayCurrency,
-      );
-      savingsTotal += converted;
-    }
+    final savingsTotals = await Future.wait(
+      goals.map((item) async {
+        final current = ((item['current_amount'] as num?) ?? 0).toDouble();
+        final goalCurrency =
+            (item['currency_code'] ?? displayCurrency).toString().toUpperCase();
+        return _convertToTargetCurrency(
+          amount: current,
+          sourceCurrencyCode: goalCurrency,
+          targetCurrencyCode: displayCurrency,
+        );
+      }),
+    );
+    final savingsTotal = savingsTotals.fold<double>(0, (a, b) => a + b);
     totalBalance += savingsTotal;
 
     final savedOrder = await _loadSavedAccountOrder();

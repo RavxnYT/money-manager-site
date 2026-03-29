@@ -5,6 +5,7 @@ import 'package:app_links/app_links.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/billing/business_entitlement_service.dart';
+import '../../core/config/business_features_config.dart';
 import '../../core/security/app_lock_gate.dart';
 import '../../data/app_repository.dart';
 import '../home/mode_router_screen.dart';
@@ -63,6 +64,7 @@ class _AuthGateState extends State<AuthGate> {
 
   Future<void> _syncBusinessSession(User? user) async {
     try {
+      if (!BusinessFeaturesConfig.isEnabled) return;
       await BusinessEntitlementService.instance.syncUser(user);
       if (user != null) {
         await _repo.refreshBusinessEntitlement();

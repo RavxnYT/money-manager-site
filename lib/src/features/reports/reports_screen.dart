@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/billing/business_access.dart';
+import '../../core/config/business_features_config.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/datetime/transaction_datetime.dart';
 import '../../core/export/csv_export_service.dart';
@@ -525,7 +526,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       ),
                     ),
                   )
-                else
+                else if (BusinessFeaturesConfig.isEnabled)
                   GlassPanel(
                     child: Padding(
                       padding: const EdgeInsets.all(14),

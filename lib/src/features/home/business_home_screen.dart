@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/network/network_status_service.dart';
 import '../../core/ui/app_design_tokens.dart';
+import '../../core/ui/workspace_ui_theme.dart';
 import '../../data/app_repository.dart';
 import '../categories/categories_screen.dart';
 import '../dashboard/dashboard_screen.dart';
@@ -45,8 +46,11 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
     _initNetworkState();
     _dataChangesSubscription = widget.repository.dataChanges.listen((_) {
       if (!mounted) return;
-      setState(() {
-        _dataRevision++;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _dataRevision++;
+        });
       });
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -370,14 +374,10 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
       ),
       bottomNavigationBar: Container(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 14),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF0B1712), Color(0xFF102019)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
+        decoration: const BoxDecoration(
+          gradient: WorkspaceUiTheme.bottomBarGradient,
           border: Border(
-            top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+            top: BorderSide(color: Color(0x14FFFFFF)),
           ),
         ),
         child: SafeArea(

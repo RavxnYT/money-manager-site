@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/billing/business_access.dart';
 import '../core/billing/business_entitlement_service.dart';
+import '../core/config/business_features_config.dart';
 import '../core/currency/exchange_rate_service.dart';
 import '../core/ledger/transaction_ledger_service.dart';
 
@@ -305,20 +306,31 @@ class AppRepository {
     return const _WorkspaceScope.personal();
   }
 
+  /// When [BusinessFeaturesConfig.isEnabled] is false, always personal scope so
+  /// DB queries and cache keys match the hidden (non-business) UX.
+  _WorkspaceScope _effectiveWorkspaceScopeFromProfile(
+    Map<String, dynamic>? profile,
+  ) {
+    if (!BusinessFeaturesConfig.isEnabled) {
+      return const _WorkspaceScope.personal();
+    }
+    return _workspaceScopeFromProfile(profile);
+  }
+
   void _rememberWorkspaceFromProfile(Map<String, dynamic>? profile) {
-    _rememberWorkspace(_workspaceScopeFromProfile(profile));
+    _rememberWorkspace(_effectiveWorkspaceScopeFromProfile(profile));
   }
 
   Future<_WorkspaceScope> _activeWorkspaceScope({
     Map<String, dynamic>? profile,
   }) async {
     if (profile != null) {
-      final scope = _workspaceScopeFromProfile(profile);
+      final scope = _effectiveWorkspaceScopeFromProfile(profile);
       _rememberWorkspace(scope);
       return scope;
     }
     final resolvedProfile = await fetchProfile();
-    final scope = _workspaceScopeFromProfile(resolvedProfile);
+    final scope = _effectiveWorkspaceScopeFromProfile(resolvedProfile);
     _rememberWorkspace(scope);
     return scope;
   }
@@ -640,6 +652,104 @@ class AppRepository {
     }
     _lastSyncAttempt = now;
     await syncPendingOperations();
+  }
+
+  /// Runs before remote reads so local optimistic writes are on the server first.
+  /// Skips work when the offline queue is empty (unlike [_syncPendingOperationsIfNeeded],
+  /// which could still touch timestamps each call).
+  Future<void> _prepareForRead({bool forceSyncPending = false}) async {
+    if (forceSyncPending) {
+      await syncPendingOperations();
+      return;
+    }
+    final pending = await _loadPendingOperations();
+    if (pending.isEmpty) return;
+    await syncPendingOperations();
+  }
+
+  bool _cachedListsEqual(
+    List<Map<String, dynamic>> a,
+    List<Map<String, dynamic>> b,
+  ) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    if (a.length > 500) return false;
+    try {
+      return jsonEncode(a) == jsonEncode(b);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _scheduleCachedListRefresh(
+    String cacheKey,
+    Future<List<Map<String, dynamic>>> Function() network,
+  ) {
+    unawaited(() async {
+      try {
+        final prev = await _readCachedList(cacheKey);
+        final next = await network();
+        await _writeCachedList(cacheKey, next);
+        if (!_cachedListsEqual(prev, next)) {
+          _notifyDataChanged();
+        }
+      } catch (_) {}
+    }());
+  }
+
+  Future<void> _refreshProfileFromNetwork() async {
+    final user = currentUser;
+    if (user == null) return;
+    try {
+      final data = await _client
+          .from('profiles')
+          .select()
+          .eq('id', user.id)
+          .maybeSingle();
+      if (data == null) return;
+      final mapped = Map<String, dynamic>.from(data);
+      final prev = await _readCachedMap(_cacheKey('profile')) ?? {};
+      await _writeCachedMap(_cacheKey('profile'), mapped);
+      _rememberWorkspaceFromProfile(mapped);
+      if (!_cachedMapsEqual(prev, mapped)) {
+        _notifyDataChanged();
+      }
+    } catch (_) {}
+  }
+
+  bool _cachedMapsEqual(Map<String, dynamic> a, Map<String, dynamic> b) {
+    try {
+      return jsonEncode(a) == jsonEncode(b);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Best-effort: warm local cache after login so tab screens open quickly.
+  /// Does not block the UI; safe to call from a post-frame callback.
+  void prefetchHomeData() {
+    if (currentUser == null) return;
+    unawaited(() async {
+      try {
+        await _prepareForRead();
+        final now = DateTime.now();
+        final tasks = <Future<void>>[
+          fetchAccounts().then<void>((_) {}).catchError((_, __) {}),
+          fetchDashboardSummary().then<void>((_) {}).catchError((_, __) {}),
+          fetchCategories('expense').then<void>((_) {}).catchError((_, __) {}),
+          fetchCategories('income').then<void>((_) {}).catchError((_, __) {}),
+          fetchSavingsGoals().then<void>((_) {}).catchError((_, __) {}),
+          fetchTransactionsForMonth(now).then<void>((_) {}).catchError((_, __) {}),
+        ];
+        if (BusinessFeaturesConfig.isEnabled) {
+          tasks.insert(
+            0,
+            fetchWorkspaces().then<void>((_) {}).catchError((_, __) {}),
+          );
+        }
+        await Future.wait<void>(tasks);
+      } catch (_) {}
+    }());
   }
 
   Future<void> syncPendingOperations() async {
@@ -1207,10 +1317,21 @@ class AppRepository {
     return (await fetchUserCurrencyCode()).toUpperCase();
   }
 
-  Future<Map<String, dynamic>?> fetchProfile() async {
+  Future<Map<String, dynamic>?> fetchProfile({
+    bool forceRefresh = false,
+  }) async {
     final user = currentUser;
     if (user == null) return null;
-    await _syncPendingOperationsIfNeeded();
+    await _prepareForRead(forceSyncPending: forceRefresh);
+    final cacheKey = _cacheKey('profile');
+    if (!forceRefresh) {
+      final cached = await _readCachedMap(cacheKey);
+      if (cached != null && cached.isNotEmpty) {
+        _rememberWorkspaceFromProfile(cached);
+        unawaited(_refreshProfileFromNetwork());
+        return cached;
+      }
+    }
     try {
       final data = await _client
           .from('profiles')
@@ -1219,12 +1340,12 @@ class AppRepository {
           .maybeSingle();
       if (data == null) return null;
       final mapped = Map<String, dynamic>.from(data);
-      await _writeCachedMap(_cacheKey('profile'), mapped);
+      await _writeCachedMap(cacheKey, mapped);
       _rememberWorkspaceFromProfile(mapped);
       return mapped;
     } catch (error) {
       if (_isNetworkError(error)) {
-        final cached = await _readCachedMap(_cacheKey('profile'));
+        final cached = await _readCachedMap(cacheKey);
         _rememberWorkspaceFromProfile(cached);
         return cached;
       }
@@ -1250,13 +1371,23 @@ class AppRepository {
     }
     final profile = await fetchProfile();
     final service = BusinessEntitlementService.instance;
-    return BusinessAccessState.fromSources(
+    final base = BusinessAccessState.fromSources(
       profile: profile,
       entitlementActive: service.hasActiveEntitlement,
       billingAvailable: service.isAvailable,
       managementUrl: service.managementUrl,
       errorMessage: service.lastError,
     );
+    if (!BusinessFeaturesConfig.isEnabled) {
+      return base.copyWith(
+        entitlementActive: false,
+        businessModeEnabled: false,
+        billingAvailable: false,
+        clearManagementUrl: true,
+        clearErrorMessage: true,
+      );
+    }
+    return base;
   }
 
   Future<bool> isBusinessModeEnabled() async {
@@ -1272,6 +1403,7 @@ class AppRepository {
   }
 
   Future<void> refreshBusinessEntitlement() async {
+    if (!BusinessFeaturesConfig.isEnabled) return;
     final user = currentUser;
     if (user == null) return;
 
@@ -1336,8 +1468,9 @@ class AppRepository {
     final user = currentUser;
     if (user == null) return [];
 
+    await _prepareForRead();
     final profile = await fetchProfile();
-    final scope = _workspaceScopeFromProfile(profile);
+    final scope = _effectiveWorkspaceScopeFromProfile(profile);
     final activeKind = scope.kind;
     final activeOrganizationId = scope.organizationId;
     final key = _cacheKey('workspaces');
@@ -1353,38 +1486,66 @@ class AppRepository {
       'is_active': activeKind != 'organization',
     };
 
-    try {
+    List<Map<String, dynamic>> mapOrganizationsFromResponse(dynamic data) {
+      return List<Map<String, dynamic>>.from(data as List<dynamic>).map((row) {
+        final organization = row['organization'];
+        final orgMap = organization is Map
+            ? Map<String, dynamic>.from(organization)
+            : <String, dynamic>{};
+        final orgId = orgMap['id']?.toString();
+        return <String, dynamic>{
+          'kind': 'organization',
+          'organization_id': orgId,
+          'label': (orgMap['name'] ?? 'Organization').toString(),
+          'slug': orgMap['slug']?.toString(),
+          'role': (row['role'] ?? 'member').toString(),
+          'sort_order': row['sort_order'] ?? 0,
+          'currency_code': (orgMap['currency_code'] ?? 'USD').toString(),
+          'has_selected_currency':
+              (orgMap['has_selected_currency'] as bool?) ?? false,
+          'is_active':
+              activeKind == 'organization' && activeOrganizationId == orgId,
+        };
+      }).toList();
+    }
+
+    Future<List<Map<String, dynamic>>> network() async {
       final data = await _client
           .from('organization_members')
           .select(
-            'role, organization:organizations!organization_members_organization_id_fkey(id, name, slug)',
+            'role, sort_order, organization:organizations!organization_members_organization_id_fkey(id, name, slug, currency_code, has_selected_currency)',
           )
           .eq('user_id', user.id)
-          .order('created_at');
-      final organizations = List<Map<String, dynamic>>.from(data)
-          .map((row) {
-            final organization = row['organization'];
-            final orgMap = organization is Map
-                ? Map<String, dynamic>.from(organization)
-                : <String, dynamic>{};
-            final orgId = orgMap['id']?.toString();
-            return <String, dynamic>{
-              'kind': 'organization',
-              'organization_id': orgId,
-              'label': (orgMap['name'] ?? 'Organization').toString(),
-              'slug': orgMap['slug']?.toString(),
-              'role': (row['role'] ?? 'member').toString(),
-              'is_active':
-                  activeKind == 'organization' && activeOrganizationId == orgId,
-            };
-          })
-          .toList();
-      final result = <Map<String, dynamic>>[
+          .order('sort_order', ascending: true);
+      final organizations = mapOrganizationsFromResponse(data);
+      return <Map<String, dynamic>>[
         personalWorkspace,
         ...organizations,
       ];
-      await _writeCachedList(key, result);
-      return result;
+    }
+
+    try {
+      final cached = await _readCachedList(key);
+      if (cached.isNotEmpty) {
+        final merged = cached.map((row) {
+          final copy = Map<String, dynamic>.from(row);
+          if ((copy['kind'] ?? '').toString().toLowerCase() == 'personal') {
+            copy['label'] = personalLabel;
+            copy['is_active'] = activeKind != 'organization';
+          } else {
+            final orgId = copy['organization_id']?.toString();
+            copy['is_active'] =
+                activeKind == 'organization' && activeOrganizationId == orgId;
+          }
+          return copy;
+        }).toList();
+        _scheduleCachedListRefresh(key, network);
+        return merged;
+      }
+
+      final fresh = await network();
+      await _writeCachedList(key, fresh);
+      return fresh;
     } catch (error) {
       if (_isNetworkError(error) || _isSchemaError(error)) {
         final cached = await _readCachedList(key);
@@ -1392,6 +1553,65 @@ class AppRepository {
       }
       rethrow;
     }
+  }
+
+  Future<void> reorderWorkspaceOrganizations({
+    required List<String> orderedOrganizationIds,
+  }) async {
+    if (orderedOrganizationIds.isEmpty) return;
+    await _client.rpc(
+      'reorder_my_workspace_organizations',
+      params: {'p_ordered_ids': orderedOrganizationIds},
+    );
+    await _removeCachedKey(_cacheKey('workspaces'));
+    _notifyDataChanged();
+  }
+
+  Future<void> updateOrganizationName({
+    required String organizationId,
+    required String name,
+  }) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('Business name is required.');
+    }
+    await _client.from('organizations').update({
+      'name': trimmed,
+    }).eq('id', organizationId);
+    await _removeCachedKey(_cacheKey('workspaces'));
+    _notifyDataChanged();
+  }
+
+  Future<void> updateOrganizationCurrency({
+    required String organizationId,
+    required String currencyCode,
+  }) async {
+    final code = currencyCode.trim().toUpperCase();
+    if (code.isEmpty) {
+      throw ArgumentError('Currency is required.');
+    }
+    await _client.from('organizations').update({
+      'currency_code': code,
+      'has_selected_currency': true,
+    }).eq('id', organizationId);
+    await _removeCachedKey(_cacheKey('workspaces'));
+    _notifyDataChanged();
+  }
+
+  Future<void> deleteOrganization({
+    required String organizationId,
+  }) async {
+    final profile = await fetchProfile();
+    final kind = (profile?['active_workspace_kind'] ?? 'personal').toString();
+    final activeId = profile?['active_workspace_organization_id']?.toString();
+    if (kind == 'organization' && activeId == organizationId) {
+      await setActiveWorkspace(kind: 'personal');
+      await setBusinessModeEnabled(false);
+    }
+    await _client.from('organizations').delete().eq('id', organizationId);
+    await _removeCachedKey(_cacheKey('workspaces'));
+    await _clearWorkspaceDataCaches();
+    _notifyDataChanged();
   }
 
   Future<void> setActiveWorkspace({
@@ -1454,14 +1674,43 @@ class AppRepository {
     await _clearWorkspaceDataCaches();
     await _removeCachedKey(_cacheKey('profile'));
     await _removeCachedKey(_cacheKey('workspaces'));
-    await fetchProfile();
+    await fetchProfile(forceRefresh: true);
     _notifyDataChanged();
     return organizationId;
   }
 
   Future<String> fetchUserCurrencyCode() async {
-    final profile = await fetchProfile();
-    return (profile?['currency_code'] ?? 'USD').toString();
+    final user = currentUser;
+    if (user == null) return 'USD';
+    await _prepareForRead();
+    var profile = await _readCachedMap(_cacheKey('profile'));
+    profile ??= await fetchProfile();
+    if (profile == null) return 'USD';
+    final scope = _effectiveWorkspaceScopeFromProfile(profile);
+    if (scope.kind == 'organization' && scope.organizationId != null) {
+      final workspaces = await _readCachedList(_cacheKey('workspaces'));
+      for (final row in workspaces) {
+        if (row['organization_id']?.toString() == scope.organizationId) {
+          if ((row['has_selected_currency'] as bool?) == true) {
+            return (row['currency_code'] ?? 'USD').toString();
+          }
+          break;
+        }
+      }
+      try {
+        final row = await _client
+            .from('organizations')
+            .select('currency_code, has_selected_currency')
+            .eq('id', scope.organizationId!)
+            .maybeSingle();
+        if (row != null && (row['has_selected_currency'] as bool?) == true) {
+          return (row['currency_code'] ?? 'USD').toString();
+        }
+      } catch (_) {
+        // Use profile default if org row missing or RLS edge case.
+      }
+    }
+    return (profile['currency_code'] ?? 'USD').toString();
   }
 
   Future<void> updateUserCurrency({
@@ -1522,10 +1771,10 @@ class AppRepository {
   Future<List<Map<String, dynamic>>> fetchDashboardSummary() async {
     final user = currentUser;
     if (user == null) return [];
-    await _syncPendingOperationsIfNeeded();
+    await _prepareForRead();
     final scope = await _activeWorkspaceScope();
     final key = _dashboardSummaryKey(scope: scope);
-    try {
+    Future<List<Map<String, dynamic>>> network() async {
       final data = await _client.rpc(
         'get_dashboard_summary',
         params: {
@@ -1533,7 +1782,16 @@ class AppRepository {
           'p_organization_id': scope.organizationId,
         },
       );
-      final mapped = List<Map<String, dynamic>>.from(data as List<dynamic>);
+      return List<Map<String, dynamic>>.from(data as List<dynamic>);
+    }
+
+    try {
+      final cached = await _readCachedList(key);
+      if (cached.isNotEmpty) {
+        _scheduleCachedListRefresh(key, network);
+        return cached;
+      }
+      final mapped = await network();
       await _writeCachedList(key, mapped);
       return mapped;
     } catch (error) {
@@ -1551,10 +1809,10 @@ class AppRepository {
       {bool forceRefresh = false}) async {
     final user = currentUser;
     if (user == null) return [];
-    await _syncPendingOperationsIfNeeded(force: forceRefresh);
+    await _prepareForRead(forceSyncPending: forceRefresh);
     final scope = await _activeWorkspaceScope();
     final key = _accountsKey(scope: scope);
-    try {
+    Future<List<Map<String, dynamic>>> network() async {
       dynamic query = _client
           .from('accounts')
           .select()
@@ -1562,7 +1820,18 @@ class AppRepository {
           .eq('is_archived', false);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query.order('created_at');
-      final mapped = List<Map<String, dynamic>>.from(data);
+      return List<Map<String, dynamic>>.from(data);
+    }
+
+    try {
+      if (!forceRefresh) {
+        final cached = await _readCachedList(key);
+        if (cached.isNotEmpty) {
+          _scheduleCachedListRefresh(key, network);
+          return cached;
+        }
+      }
+      final mapped = await network();
       await _writeCachedList(key, mapped);
       return mapped;
     } catch (error) {
@@ -1803,11 +2072,11 @@ class AppRepository {
   Future<List<Map<String, dynamic>>> fetchCategories(String type) async {
     final user = currentUser;
     if (user == null) return [];
-    await _syncPendingOperationsIfNeeded();
+    await _prepareForRead();
     final scope = await _activeWorkspaceScope();
     final key = _categoriesKey(type, scope: scope);
     final defaults = _defaultCategoriesFor(type);
-    try {
+    Future<List<Map<String, dynamic>>> network() async {
       dynamic query = _client
           .from('categories')
           .select()
@@ -1829,16 +2098,26 @@ class AppRepository {
         data = await refreshQuery.order('name');
         mapped = List<Map<String, dynamic>>.from(data);
       }
+      return mapped;
+    }
+
+    try {
+      final cached = await _readCachedList(key);
+      if (cached.isNotEmpty) {
+        _scheduleCachedListRefresh(key, network);
+        return cached;
+      }
+      final mapped = await network();
       await _writeCachedList(key, mapped);
       return mapped;
     } catch (error) {
       if (_isNetworkError(error)) {
-        final cached = await _readCachedList(key);
-        if (cached.isEmpty && defaults.isNotEmpty) {
+        final stale = await _readCachedList(key);
+        if (stale.isEmpty && defaults.isNotEmpty) {
           await _seedDefaultCategories(type, defaults);
           return _readCachedList(key);
         }
-        return cached;
+        return stale;
       }
       rethrow;
     }
@@ -2059,10 +2338,10 @@ class AppRepository {
   Future<List<Map<String, dynamic>>> fetchTransactions() async {
     final user = currentUser;
     if (user == null) return [];
-    await _syncPendingOperationsIfNeeded();
+    await _prepareForRead();
     final scope = await _activeWorkspaceScope();
     final key = _transactionsKey(scope: scope);
-    try {
+    Future<List<Map<String, dynamic>>> network() async {
       dynamic query = _client
           .from('transactions')
           .select(
@@ -2076,7 +2355,16 @@ class AppRepository {
       final data = await query
           .order('transaction_date', ascending: false)
           .limit(200);
-      final mapped = List<Map<String, dynamic>>.from(data);
+      return List<Map<String, dynamic>>.from(data);
+    }
+
+    try {
+      final cached = await _readCachedList(key);
+      if (cached.isNotEmpty) {
+        _scheduleCachedListRefresh(key, network);
+        return cached;
+      }
+      final mapped = await network();
       await _writeCachedList(key, mapped);
       return mapped;
     } catch (error) {
@@ -2091,7 +2379,7 @@ class AppRepository {
       DateTime month) async {
     final user = currentUser;
     if (user == null) return [];
-    await _syncPendingOperationsIfNeeded();
+    await _prepareForRead();
     final scope = await _activeWorkspaceScope();
 
     final start = DateTime(month.year, month.month, 1);
@@ -2100,7 +2388,7 @@ class AppRepository {
     final endDate = end.toUtc().toIso8601String();
     final key = _transactionsMonthCacheKey(month, scope: scope);
 
-    try {
+    Future<List<Map<String, dynamic>>> network() async {
       dynamic query = _client
           .from('transactions')
           .select(
@@ -2114,8 +2402,16 @@ class AppRepository {
           .lt('transaction_date', endDate);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query.order('transaction_date', ascending: false);
+      return List<Map<String, dynamic>>.from(data);
+    }
 
-      final mapped = List<Map<String, dynamic>>.from(data);
+    try {
+      final cached = await _readCachedList(key);
+      if (cached.isNotEmpty) {
+        _scheduleCachedListRefresh(key, network);
+        return cached;
+      }
+      final mapped = await network();
       await _writeCachedList(key, mapped);
       return mapped;
     } catch (error) {
@@ -2529,17 +2825,26 @@ class AppRepository {
   Future<List<Map<String, dynamic>>> fetchSavingsGoals() async {
     final user = currentUser;
     if (user == null) return [];
-    await _syncPendingOperationsIfNeeded();
+    await _prepareForRead();
     final scope = await _activeWorkspaceScope();
     final key = _savingsGoalsKey(scope: scope);
-    try {
+    Future<List<Map<String, dynamic>>> network() async {
       dynamic query = _client
           .from('savings_goals')
           .select()
           .eq('user_id', user.id);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query.order('created_at', ascending: false);
-      final mapped = List<Map<String, dynamic>>.from(data);
+      return List<Map<String, dynamic>>.from(data);
+    }
+
+    try {
+      final cached = await _readCachedList(key);
+      if (cached.isNotEmpty) {
+        _scheduleCachedListRefresh(key, network);
+        return cached;
+      }
+      final mapped = await network();
       await _writeCachedList(key, mapped);
       return mapped;
     } catch (error) {
@@ -2901,14 +3206,14 @@ class AppRepository {
       DateTime monthStart) async {
     final user = currentUser;
     if (user == null) return [];
-    await _syncPendingOperationsIfNeeded();
+    await _prepareForRead();
     final scope = await _activeWorkspaceScope();
     final normalized = DateTime(monthStart.year, monthStart.month, 1)
         .toIso8601String()
         .split('T')
         .first;
     final key = _budgetsMonthCacheKey(monthStart, scope: scope);
-    try {
+    Future<List<Map<String, dynamic>>> network() async {
       dynamic query = _client
           .from('budgets')
           .select('*, categories(name)')
@@ -2916,7 +3221,16 @@ class AppRepository {
           .eq('month_start', normalized);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query;
-      final mapped = List<Map<String, dynamic>>.from(data);
+      return List<Map<String, dynamic>>.from(data);
+    }
+
+    try {
+      final cached = await _readCachedList(key);
+      if (cached.isNotEmpty) {
+        _scheduleCachedListRefresh(key, network);
+        return cached;
+      }
+      final mapped = await network();
       await _writeCachedList(key, mapped);
       return mapped;
     } catch (error) {
@@ -3151,10 +3465,10 @@ class AppRepository {
   Future<List<Map<String, dynamic>>> fetchSavingsGoalContributions() async {
     final user = currentUser;
     if (user == null) return [];
-    await _syncPendingOperationsIfNeeded();
+    await _prepareForRead();
     final scope = await _activeWorkspaceScope();
     final key = _savingsGoalContributionsKey(scope: scope);
-    try {
+    Future<List<Map<String, dynamic>>> network() async {
       dynamic query = _client
           .from('savings_goal_contributions')
           .select()
@@ -3163,7 +3477,16 @@ class AppRepository {
       final data = await query
           .order('created_at', ascending: false)
           .limit(1000);
-      final mapped = List<Map<String, dynamic>>.from(data);
+      return List<Map<String, dynamic>>.from(data);
+    }
+
+    try {
+      final cached = await _readCachedList(key);
+      if (cached.isNotEmpty) {
+        _scheduleCachedListRefresh(key, network);
+        return cached;
+      }
+      final mapped = await network();
       await _writeCachedList(key, mapped);
       return mapped;
     } catch (error) {
@@ -3177,15 +3500,24 @@ class AppRepository {
   Future<List<Map<String, dynamic>>> fetchLoans() async {
     final user = currentUser;
     if (user == null) return [];
-    await _syncPendingOperationsIfNeeded();
+    await _prepareForRead();
     final scope = await _activeWorkspaceScope();
     final key = _loansKey(scope: scope);
-    try {
+    Future<List<Map<String, dynamic>>> network() async {
       dynamic query =
           _client.from('loans').select().eq('user_id', user.id);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query.order('created_at', ascending: false);
-      final mapped = List<Map<String, dynamic>>.from(data);
+      return List<Map<String, dynamic>>.from(data);
+    }
+
+    try {
+      final cached = await _readCachedList(key);
+      if (cached.isNotEmpty) {
+        _scheduleCachedListRefresh(key, network);
+        return cached;
+      }
+      final mapped = await network();
       await _writeCachedList(key, mapped);
       return mapped;
     } catch (error) {
@@ -3199,10 +3531,10 @@ class AppRepository {
   Future<List<Map<String, dynamic>>> fetchLoanPayments() async {
     final user = currentUser;
     if (user == null) return [];
-    await _syncPendingOperationsIfNeeded();
+    await _prepareForRead();
     final scope = await _activeWorkspaceScope();
     final key = _loanPaymentsKey(scope: scope);
-    try {
+    Future<List<Map<String, dynamic>>> network() async {
       dynamic query = _client
           .from('loan_payments')
           .select()
@@ -3212,7 +3544,16 @@ class AppRepository {
           .order('payment_date', ascending: false)
           .order('created_at', ascending: false)
           .limit(2000);
-      final mapped = List<Map<String, dynamic>>.from(data);
+      return List<Map<String, dynamic>>.from(data);
+    }
+
+    try {
+      final cached = await _readCachedList(key);
+      if (cached.isNotEmpty) {
+        _scheduleCachedListRefresh(key, network);
+        return cached;
+      }
+      final mapped = await network();
       await _writeCachedList(key, mapped);
       return mapped;
     } catch (error) {

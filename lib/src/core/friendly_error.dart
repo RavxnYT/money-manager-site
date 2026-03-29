@@ -63,6 +63,27 @@ String friendlyErrorMessage(Object? error) {
     if (msg.contains('violates foreign key constraint')) {
       return 'This item is still used by transactions. Update/delete related transactions first.';
     }
+    if (msg.contains('unauthorized') || msg.contains('not authorized')) {
+      return 'You do not have permission to do this. Sign in again or check your account.';
+    }
+    // Prefer the server message so RLS/constraint/RPC errors are visible (the
+    // old generic string hid the real cause behind "Database request failed").
+    final serverMessage = error.message.trim();
+    if (serverMessage.isNotEmpty) {
+      return serverMessage;
+    }
+    final hint = error.hint?.trim();
+    if (hint != null && hint.isNotEmpty) {
+      return hint;
+    }
+    final details = error.details?.toString().trim();
+    if (details != null && details.isNotEmpty) {
+      return details;
+    }
+    final code = error.code?.trim();
+    if (code != null && code.isNotEmpty) {
+      return 'Database request failed (code $code). Please try again.';
+    }
     return 'Database request failed. Please try again.';
   }
 

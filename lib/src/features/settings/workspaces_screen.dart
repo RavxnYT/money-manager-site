@@ -22,13 +22,16 @@ class WorkspacesScreen extends StatefulWidget {
 }
 
 class _WorkspacesScreenState extends State<WorkspacesScreen> {
-  late Future<_WorkspaceScreenData> _future;
+  bool _loading = true;
+  Object? _loadError;
+  _WorkspaceScreenData? _data;
+  List<Map<String, dynamic>> _localOrgs = [];
   bool _busy = false;
 
   @override
   void initState() {
     super.initState();
-    _future = _loadData();
+    _reload();
   }
 
   Future<_WorkspaceScreenData> _loadData() async {
@@ -41,11 +44,31 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
   }
 
   Future<void> _reload() async {
-    final future = _loadData();
     setState(() {
-      _future = future;
+      _loading = true;
+      _loadError = null;
     });
-    await future;
+    try {
+      final loaded = await _loadData();
+      if (!mounted) return;
+      setState(() {
+        _data = loaded;
+        _localOrgs = loaded.workspaces
+            .where(
+              (row) =>
+                  (row['kind'] ?? '').toString().toLowerCase() == 'organization',
+            )
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = error;
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _switchToPersonal() async {
@@ -59,6 +82,14 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Personal workspace is now active.')),
       );
+      if (widget.showAppBar && Navigator.of(context).canPop()) {
+        if (mounted) setState(() => _busy = false);
+        Navigator.of(context).pop();
+        return;
+      }
+      if (!widget.showAppBar) {
+        return;
+      }
       await _reload();
     } catch (error) {
       if (!mounted) return;
@@ -66,7 +97,7 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
         SnackBar(content: Text(friendlyErrorMessage(error))),
       );
     } finally {
-      if (mounted) {
+      if (mounted && _busy) {
         setState(() => _busy = false);
       }
     }
@@ -94,6 +125,11 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
           ),
         );
       }
+      if (changed && widget.showAppBar && Navigator.of(context).canPop()) {
+        if (mounted) setState(() => _busy = false);
+        Navigator.of(context).pop();
+        return;
+      }
       await _reload();
     } catch (error) {
       if (!mounted) return;
@@ -101,7 +137,7 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
         SnackBar(content: Text(friendlyErrorMessage(error))),
       );
     } finally {
-      if (mounted) {
+      if (mounted && _busy) {
         setState(() => _busy = false);
       }
     }
@@ -121,6 +157,11 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
           const SnackBar(content: Text('Business workspace created.')),
         );
       }
+      if (changed && widget.showAppBar && Navigator.of(context).canPop()) {
+        if (mounted) setState(() => _busy = false);
+        Navigator.of(context).pop();
+        return;
+      }
       await _reload();
     } catch (error) {
       if (!mounted) return;
@@ -128,34 +169,170 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
         SnackBar(content: Text(friendlyErrorMessage(error))),
       );
     } finally {
-      if (mounted) {
+      if (mounted && _busy) {
         setState(() => _busy = false);
       }
     }
   }
 
-  Widget _workspaceTile({
+  bool _canManageOrganization(Map<String, dynamic> workspace) {
+    final role = (workspace['role'] ?? '').toString().toLowerCase();
+    return role == 'owner';
+  }
+
+  Future<void> _renameOrganization(Map<String, dynamic> workspace) async {
+    final organizationId = workspace['organization_id']?.toString();
+    if (organizationId == null || organizationId.isEmpty) return;
+
+    final controller = TextEditingController(
+      text: (workspace['label'] ?? '').toString(),
+    );
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Rename business'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            labelText: 'Business name',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      controller.dispose();
+    });
+
+    if (!mounted || name == null || name.isEmpty) return;
+
+    setState(() => _busy = true);
+    try {
+      await widget.repository.updateOrganizationName(
+        organizationId: organizationId,
+        name: name,
+      );
+      if (!mounted) return;
+      await _reload();
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Business renamed.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(error))),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _confirmDeleteOrganization(Map<String, dynamic> workspace) async {
+    final organizationId = workspace['organization_id']?.toString();
+    if (organizationId == null || organizationId.isEmpty) return;
+    final label = (workspace['label'] ?? 'This business').toString();
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete business workspace?'),
+        content: Text(
+          'Permanently delete "$label" and its data? '
+          'This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              foregroundColor: Colors.white,
+              backgroundColor: Colors.red.shade700,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await widget.repository.deleteOrganization(
+        organizationId: organizationId,
+      );
+      if (!mounted) return;
+      await _reload();
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deleted $label.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(error))),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _onReorderOrganizations(int oldIndex, int newIndex) async {
+    if (oldIndex < newIndex) {
+      newIndex -= 1;
+    }
+    final next = List<Map<String, dynamic>>.from(_localOrgs);
+    final item = next.removeAt(oldIndex);
+    next.insert(newIndex, item);
+
+    setState(() => _localOrgs = next);
+
+    final orderedIds = next
+        .map((w) => w['organization_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toList();
+
+    try {
+      await widget.repository.reorderWorkspaceOrganizations(
+        orderedOrganizationIds: orderedIds,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(error))),
+      );
+      await _reload();
+    }
+  }
+
+  Widget _personalTile({
     required Map<String, dynamic> workspace,
     required bool entitled,
   }) {
-    final isOrganization =
-        (workspace['kind'] ?? '').toString().toLowerCase() == 'organization';
     final isActive = (workspace['is_active'] as bool?) ?? false;
-    final role = (workspace['role'] ?? 'owner').toString();
-    final locked = isOrganization && !entitled;
-
     return GlassPanel(
       margin: const EdgeInsets.symmetric(vertical: 6),
       child: ListTile(
-        leading: Icon(
-          isOrganization ? Icons.apartment_rounded : Icons.person_rounded,
-        ),
-        title: Text((workspace['label'] ?? 'Workspace').toString()),
-        subtitle: Text(
-          isOrganization
-              ? 'Role: $role${locked ? ' • Business access required' : ''}'
-              : 'Your personal workspace',
-        ),
+        leading: const Icon(Icons.person_rounded),
+        title: Text((workspace['label'] ?? 'Personal').toString()),
+        subtitle: const Text('Your personal workspace'),
         trailing: isActive
             ? const Icon(
                 Icons.check_circle_rounded,
@@ -167,19 +344,90 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : Icon(
-                    locked
-                        ? Icons.lock_outline_rounded
-                        : Icons.chevron_right,
+                : const Icon(Icons.chevron_right),
+        onTap: _busy || isActive ? null : _switchToPersonal,
+      ),
+    );
+  }
+
+  Widget _organizationTile({
+    required Map<String, dynamic> workspace,
+    required int reorderIndex,
+    required bool entitled,
+    required bool showDragHandle,
+  }) {
+    final isActive = (workspace['is_active'] as bool?) ?? false;
+    final role = (workspace['role'] ?? 'owner').toString();
+    final locked = !entitled;
+    final canManage = entitled && _canManageOrganization(workspace);
+    final orgKey = workspace['organization_id']?.toString() ?? '$reorderIndex';
+
+    return GlassPanel(
+      key: ValueKey(orgKey),
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      child: ListTile(
+        leading: showDragHandle && canManage && !locked
+            ? ReorderableDragStartListener(
+                index: reorderIndex,
+                child: const Icon(Icons.drag_handle_rounded),
+              )
+            : const Icon(Icons.apartment_rounded),
+        title: Text((workspace['label'] ?? 'Workspace').toString()),
+        subtitle: Text(
+          'Role: $role${locked ? ' • Business access required' : ''}',
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (canManage && !locked)
+              PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'rename') {
+                    _renameOrganization(workspace);
+                  } else if (value == 'delete') {
+                    _confirmDeleteOrganization(workspace);
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: 'rename',
+                    child: ListTile(
+                      leading: Icon(Icons.edit_outlined),
+                      title: Text('Rename'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-        onTap: _busy
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: ListTile(
+                      leading: Icon(Icons.delete_outline),
+                      title: Text('Delete'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
+              ),
+            if (isActive)
+              const Icon(
+                Icons.check_circle_rounded,
+                color: Color(0xFF3BD188),
+              )
+            else if (_busy)
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              Icon(
+                locked ? Icons.lock_outline_rounded : Icons.chevron_right,
+              ),
+          ],
+        ),
+        onTap: _busy || isActive || locked
             ? null
             : () {
-                if (isOrganization) {
-                  _switchToBusinessWorkspace(workspace);
-                } else {
-                  _switchToPersonal();
-                }
+                _switchToBusinessWorkspace(workspace);
               },
       ),
     );
@@ -196,154 +444,158 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
       body: AppPageScaffold(
         child: RefreshIndicator(
           onRefresh: _reload,
-          child: FutureBuilder<_WorkspaceScreenData>(
-            future: _future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (snapshot.hasError) {
-                return ListView(
-                  children: [
-                    const SizedBox(height: 120),
-                    Center(child: Text(friendlyErrorMessage(snapshot.error))),
-                  ],
-                );
-              }
-
-              final data = snapshot.data;
-              final workspaces = data?.workspaces ?? const [];
-              final businessAccess =
-                  data?.businessAccess ?? const BusinessAccessState();
-              final organizationWorkspaces = workspaces
-                  .where(
-                    (row) =>
-                        (row['kind'] ?? '').toString().toLowerCase() ==
-                        'organization',
-                  )
-                  .toList();
-              final activeWorkspace = workspaces.cast<Map<String, dynamic>?>().firstWhere(
-                    (row) => (row?['is_active'] as bool?) ?? false,
-                    orElse: () => null,
-                  );
-              final activeLabel =
-                  (activeWorkspace?['label'] ?? 'Personal').toString();
-
-              return ListView(
-                padding: const EdgeInsets.fromLTRB(2, 12, 2, 120),
-                children: [
-                  Text(
-                    'Business workspaces',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 8),
-                  GlassPanel(
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Current workspace',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            activeLabel,
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            businessAccess.businessModeEnabled
-                                ? 'Business shell is active and this workspace has its own isolated data.'
-                                : 'Personal shell is active. Turn on Business Mode to enter a business workspace.',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.78),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  GlassPanel(
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            businessAccess.entitlementActive
-                                ? 'Create and switch businesses'
-                                : 'Unlock business workspaces',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            businessAccess.entitlementActive
-                                ? 'Each business keeps separate accounts, categories, transactions, budgets, and reports.'
-                                : 'Turning on Business Mode will open the RevenueCat paywall first, then create your first business workspace.',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.78),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            children: [
-                              FilledButton.icon(
-                                onPressed:
-                                    _busy ? null : _createBusinessWorkspace,
-                                icon: const Icon(Icons.add_business_rounded),
-                                label: const Text('Create Business'),
-                              ),
-                              if (businessAccess.businessModeEnabled)
-                                OutlinedButton.icon(
-                                  onPressed: _busy ? null : _switchToPersonal,
-                                  icon: const Icon(Icons.person_outline_rounded),
-                                  label: const Text('Use Personal'),
-                                ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Available workspaces',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  ...workspaces.map(
-                    (workspace) => _workspaceTile(
-                      workspace: workspace,
-                      entitled: businessAccess.entitlementActive,
-                    ),
-                  ),
-                  if (organizationWorkspaces.isEmpty) ...[
-                    const SizedBox(height: 10),
-                    GlassPanel(
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Text(
-                          businessAccess.entitlementActive
-                              ? 'No business workspaces yet. Create one to start keeping business data separate from personal data.'
-                              : 'No business workspaces yet. Turn on Business Mode to create your first business.',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.78),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              );
-            },
-          ),
+          child: _buildBody(),
         ),
       ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_loadError != null) {
+      return ListView(
+        children: [
+          const SizedBox(height: 120),
+          Center(child: Text(friendlyErrorMessage(_loadError))),
+        ],
+      );
+    }
+
+    final data = _data;
+    if (data == null) {
+      return const SizedBox.shrink();
+    }
+
+    final workspaces = data.workspaces;
+    final businessAccess = data.businessAccess;
+    final personalWorkspace = workspaces.firstWhere(
+      (row) => (row['kind'] ?? '').toString().toLowerCase() == 'personal',
+      orElse: () => <String, dynamic>{
+        'kind': 'personal',
+        'label': 'Personal',
+        'is_active': true,
+      },
+    );
+    final activeWorkspace =
+        workspaces.cast<Map<String, dynamic>?>().firstWhere(
+              (row) => (row?['is_active'] as bool?) ?? false,
+              orElse: () => null,
+            );
+    final activeLabel =
+        (activeWorkspace?['label'] ?? 'Personal').toString();
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(2, 12, 2, 120),
+      children: [
+        Text(
+          'Workspaces',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 8),
+        GlassPanel(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Current workspace',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  activeLabel,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  businessAccess.businessModeEnabled
+                      ? 'Business shell is active. This workspace uses its own accounts, categories, and data.'
+                      : 'Personal shell is active. Open a business below or create one.',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.78),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          businessAccess.entitlementActive
+              ? 'Create a business'
+              : 'Business workspaces',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          businessAccess.entitlementActive
+              ? 'Each business keeps separate books from your personal workspace.'
+              : 'Subscribe to create and manage separate business workspaces.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.78),
+          ),
+        ),
+        const SizedBox(height: 12),
+        FilledButton.icon(
+          onPressed: _busy ? null : _createBusinessWorkspace,
+          icon: const Icon(Icons.add_business_rounded),
+          label: const Text('Create business'),
+        ),
+        const SizedBox(height: 20),
+        Text(
+          'Available workspaces',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        _personalTile(
+          workspace: personalWorkspace,
+          entitled: businessAccess.entitlementActive,
+        ),
+        if (businessAccess.entitlementActive && _localOrgs.isNotEmpty)
+          ReorderableListView(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            buildDefaultDragHandles: false,
+            onReorder: _onReorderOrganizations,
+            children: [
+              for (var i = 0; i < _localOrgs.length; i++)
+                _organizationTile(
+                  workspace: _localOrgs[i],
+                  reorderIndex: i,
+                  entitled: businessAccess.entitlementActive,
+                  showDragHandle: true,
+                ),
+            ],
+          )
+        else
+          ..._localOrgs.map(
+            (workspace) => _organizationTile(
+              workspace: workspace,
+              reorderIndex: 0,
+              entitled: businessAccess.entitlementActive,
+              showDragHandle: false,
+            ),
+          ),
+        if (_localOrgs.isEmpty) ...[
+          const SizedBox(height: 10),
+          GlassPanel(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Text(
+                businessAccess.entitlementActive
+                    ? 'No businesses yet. Tap "Create business" to add one.'
+                    : 'No businesses yet. When you subscribe, you can add businesses here.',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.78),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
