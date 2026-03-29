@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/network/network_status_service.dart';
 import '../../core/ui/app_design_tokens.dart';
+import '../../core/ui/keep_alive_tab_page.dart';
 import '../../core/ui/workspace_ui_theme.dart';
 import '../../data/app_repository.dart';
 import '../categories/categories_screen.dart';
@@ -30,6 +31,10 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
   late final PageController _pageController;
   StreamSubscription<bool>? _networkSubscription;
   StreamSubscription<int>? _dataChangesSubscription;
+  int _tabBodiesCacheKey = -1;
+  List<Widget> _cachedTabBodies = const [];
+  int? _programmaticPageTarget;
+
   static const _titles = [
     'Overview',
     'Transactions',
@@ -50,6 +55,7 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
         if (!mounted) return;
         setState(() {
           _dataRevision++;
+          _programmaticPageTarget = null;
         });
       });
     });
@@ -156,16 +162,37 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
     super.dispose();
   }
 
-  Future<void> _onTabTapped(int index) async {
+  void _onTabTapped(int index) {
     if (_currentIndex == index) return;
-    setState(() => _currentIndex = index);
+    setState(() {
+      _currentIndex = index;
+      _programmaticPageTarget = index;
+    });
     if (_pageController.hasClients) {
-      await _pageController.animateToPage(
-        index,
-        duration: AppDesignTokens.quick,
-        curve: Curves.easeOutCubic,
-      );
+      _pageController
+          .animateToPage(
+            index,
+            duration: AppDesignTokens.tabPage,
+            curve: Curves.fastOutSlowIn,
+          )
+          .whenComplete(() {
+            if (!mounted) return;
+            setState(() => _programmaticPageTarget = null);
+          });
     }
+  }
+
+  void _onMainPageChanged(int value) {
+    if (!mounted) return;
+    final lock = _programmaticPageTarget;
+    if (lock != null && value != lock) return;
+    if (value == _currentIndex && lock == null) return;
+    setState(() {
+      _currentIndex = value;
+      if (lock != null) {
+        _programmaticPageTarget = null;
+      }
+    });
   }
 
   Widget _buildNavItem({
@@ -239,9 +266,8 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final pages = [
+  List<Widget> _createTabBodies() {
+    return [
       DashboardScreen(
         key: ValueKey('business-dashboard-$_dataRevision'),
         repository: widget.repository,
@@ -269,25 +295,30 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
         repository: widget.repository,
       ),
     ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dataRevision != _tabBodiesCacheKey) {
+      _tabBodiesCacheKey = _dataRevision;
+      _cachedTabBodies = _createTabBodies();
+    }
+    final pages = _cachedTabBodies;
 
     return Scaffold(
       appBar: AppBar(
-        title: AnimatedSwitcher(
-          duration: AppDesignTokens.quick,
-          child: Column(
-            key: ValueKey(_titles[_currentIndex]),
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Business Workspace'),
-              Text(
-                _titles[_currentIndex],
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: Colors.white70),
-              ),
-            ],
-          ),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Business Workspace'),
+            Text(
+              _titles[_currentIndex],
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Colors.white70),
+            ),
+          ],
         ),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
@@ -357,16 +388,25 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
                   ),
           ),
           Expanded(
-            child: PageView.builder(
-              controller: _pageController,
-              itemCount: pages.length,
-              onPageChanged: (value) {
-                if (!mounted) return;
-                setState(() => _currentIndex = value);
-              },
-              itemBuilder: (context, index) => KeyedSubtree(
-                key: ValueKey('business-tab-$index-$_dataRevision'),
-                child: pages[index],
+            child: RepaintBoundary(
+              child: NotificationListener<UserScrollNotification>(
+                onNotification: (_) {
+                  if (_programmaticPageTarget == null) return false;
+                  setState(() => _programmaticPageTarget = null);
+                  return false;
+                },
+                child: PageView(
+                  key: const ValueKey('business-main-page-view'),
+                  controller: _pageController,
+                  onPageChanged: _onMainPageChanged,
+                  children: [
+                    for (var i = 0; i < pages.length; i++)
+                      KeepAliveTabPage(
+                        key: ValueKey('business-tab-$i-$_dataRevision'),
+                        child: pages[i],
+                      ),
+                  ],
+                ),
               ),
             ),
           ),

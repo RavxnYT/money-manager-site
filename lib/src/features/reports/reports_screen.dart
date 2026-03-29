@@ -212,6 +212,112 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
+  void _showAllCategoriesSheet({
+    required BuildContext context,
+    required String kind,
+    required List<MapEntry<String, ({String name, double total})>> sorted,
+    required List<Map<String, dynamic>> monthRows,
+  }) {
+    final labelKind = kind == 'income' ? 'Income' : 'Expense';
+    final accent =
+        kind == 'income' ? const Color(0xFF3BD188) : const Color(0xFFFF6B86);
+    final monthLabel = _windowLabel(_monthsInWindow());
+    final grandTotal = sorted.fold<double>(0, (s, e) => s + e.value.total);
+    final maxH = math.min(
+      MediaQuery.sizeOf(context).height * 0.72,
+      560.0,
+    );
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: SizedBox(
+              height: maxH,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '$labelKind by category',
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '$monthLabel · ${sorted.length} categories · '
+                    '${formatMoney(grandTotal, currencyCode: _currencyCode)} total',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.white.withValues(alpha: 0.55),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: sorted.isEmpty
+                        ? Center(
+                            child: Text(
+                              'No ${labelKind.toLowerCase()} in this period.',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.55),
+                              ),
+                            ),
+                          )
+                        : ListView.separated(
+                            itemCount: sorted.length,
+                            separatorBuilder: (_, __) => Divider(
+                              height: 1,
+                              color: Colors.white.withValues(alpha: 0.08),
+                            ),
+                            itemBuilder: (c, i) {
+                              final e = sorted[i];
+                              final pct = grandTotal > 0
+                                  ? (e.value.total / grandTotal * 100)
+                                  : 0.0;
+                              return ListTile(
+                                contentPadding:
+                                    const EdgeInsets.symmetric(horizontal: 4),
+                                title: Text(e.value.name),
+                                subtitle: Text(
+                                  '${pct.toStringAsFixed(1)}% of total',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color:
+                                        Colors.white.withValues(alpha: 0.45),
+                                  ),
+                                ),
+                                trailing: Text(
+                                  formatMoney(e.value.total,
+                                      currencyCode: _currencyCode),
+                                  style: TextStyle(
+                                    color: accent,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                onTap: () {
+                                  Navigator.pop(ctx);
+                                  _openCategoryTransactions(
+                                    context: context,
+                                    monthRows: monthRows,
+                                    categoryKey: e.key,
+                                    kind: kind,
+                                    categoryName: e.value.name,
+                                  );
+                                },
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   void _showOtherCategoriesSheet({
     required BuildContext context,
     required String kind,
@@ -618,7 +724,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                               ),
                             const SizedBox(height: 6),
                             Text(
-                              'Tap a slice to see transactions',
+                              'Tap the center for all categories and amounts · '
+                              'tap a slice for transactions',
                               style: subtitleStyle,
                             ),
                             const SizedBox(height: 8),
@@ -628,6 +735,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                   ? sortedExpenses
                                   : sortedIncome,
                               currencyCode: _currencyCode,
+                              onCenterTap: () => _showAllCategoriesSheet(
+                                context: context,
+                                kind: _reportChartKind,
+                                sorted: _reportChartKind == 'expense'
+                                    ? sortedExpenses
+                                    : sortedIncome,
+                                monthRows: rows,
+                              ),
                               onCategoryTap: (key, name) =>
                                   _openCategoryTransactions(
                                 context: context,
@@ -650,6 +765,23 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 10),
+                if (_reportChartKind == 'expense')
+                  ..._topExpenseCategoriesSection(
+                    context: context,
+                    months: months,
+                    sortedExpenses: sortedExpenses,
+                    maxExpense: maxExpense,
+                    rows: rows,
+                  )
+                else
+                  ..._topIncomeCategoriesSection(
+                    context: context,
+                    months: months,
+                    sortedIncome: sortedIncome,
+                    maxIncome: maxIncome,
+                    rows: rows,
+                  ),
                 if (_businessAccess.canUseAdvancedReports) ...[
                   const SizedBox(height: 10),
                   GlassPanel(
@@ -780,68 +912,25 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ),
                   ),
                 ],
-                const SizedBox(height: 10),
-                Text('Top Expense Categories', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 8),
-                if (sortedExpenses.isEmpty)
-                  GlassPanel(
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Text(
-                        months.length == 1
-                            ? 'No expense data this month'
-                            : 'No expense data in this period',
-                      ),
-                    ),
+                if (_reportChartKind == 'expense') ...[
+                  const SizedBox(height: 12),
+                  ..._topIncomeCategoriesSection(
+                    context: context,
+                    months: months,
+                    sortedIncome: sortedIncome,
+                    maxIncome: maxIncome,
+                    rows: rows,
                   ),
-                ...sortedExpenses.take(6).map(
-                  (e) => _barCard(
-                    label: e.value.name,
-                    value: e.value.total,
-                    formatted:
-                        formatMoney(e.value.total, currencyCode: _currencyCode),
-                    ratio: e.value.total / maxExpense,
-                    color: const Color(0xFFFF6B86),
-                    onTap: () => _openCategoryTransactions(
-                      context: context,
-                      monthRows: rows,
-                      categoryKey: e.key,
-                      kind: 'expense',
-                      categoryName: e.value.name,
-                    ),
+                ] else ...[
+                  const SizedBox(height: 12),
+                  ..._topExpenseCategoriesSection(
+                    context: context,
+                    months: months,
+                    sortedExpenses: sortedExpenses,
+                    maxExpense: maxExpense,
+                    rows: rows,
                   ),
-                ),
-                const SizedBox(height: 12),
-                Text('Top Income Categories', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 8),
-                if (sortedIncome.isEmpty)
-                  GlassPanel(
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Text(
-                        months.length == 1
-                            ? 'No income data this month'
-                            : 'No income data in this period',
-                      ),
-                    ),
-                  ),
-                ...sortedIncome.take(6).map(
-                  (e) => _barCard(
-                    label: e.value.name,
-                    value: e.value.total,
-                    formatted:
-                        formatMoney(e.value.total, currencyCode: _currencyCode),
-                    ratio: e.value.total / maxIncome,
-                    color: const Color(0xFF3BD188),
-                    onTap: () => _openCategoryTransactions(
-                      context: context,
-                      monthRows: rows,
-                      categoryKey: e.key,
-                      kind: 'income',
-                      categoryName: e.value.name,
-                    ),
-                  ),
-                ),
+                ],
               ],
             );
             },
@@ -849,6 +938,94 @@ class _ReportsScreenState extends State<ReportsScreen> {
         ),
       ),
     );
+  }
+
+  List<Widget> _topExpenseCategoriesSection({
+    required BuildContext context,
+    required List<DateTime> months,
+    required List<MapEntry<String, ({String name, double total})>> sortedExpenses,
+    required double maxExpense,
+    required List<Map<String, dynamic>> rows,
+  }) {
+    return [
+      Text(
+        'Top Expense Categories',
+        style: Theme.of(context).textTheme.titleMedium,
+      ),
+      const SizedBox(height: 8),
+      if (sortedExpenses.isEmpty)
+        GlassPanel(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Text(
+              months.length == 1
+                  ? 'No expense data this month'
+                  : 'No expense data in this period',
+            ),
+          ),
+        ),
+      ...sortedExpenses.take(6).map(
+        (e) => _barCard(
+          label: e.value.name,
+          value: e.value.total,
+          formatted:
+              formatMoney(e.value.total, currencyCode: _currencyCode),
+          ratio: e.value.total / maxExpense,
+          color: const Color(0xFFFF6B86),
+          onTap: () => _openCategoryTransactions(
+            context: context,
+            monthRows: rows,
+            categoryKey: e.key,
+            kind: 'expense',
+            categoryName: e.value.name,
+          ),
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _topIncomeCategoriesSection({
+    required BuildContext context,
+    required List<DateTime> months,
+    required List<MapEntry<String, ({String name, double total})>> sortedIncome,
+    required double maxIncome,
+    required List<Map<String, dynamic>> rows,
+  }) {
+    return [
+      Text(
+        'Top Income Categories',
+        style: Theme.of(context).textTheme.titleMedium,
+      ),
+      const SizedBox(height: 8),
+      if (sortedIncome.isEmpty)
+        GlassPanel(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Text(
+              months.length == 1
+                  ? 'No income data this month'
+                  : 'No income data in this period',
+            ),
+          ),
+        ),
+      ...sortedIncome.take(6).map(
+        (e) => _barCard(
+          label: e.value.name,
+          value: e.value.total,
+          formatted:
+              formatMoney(e.value.total, currencyCode: _currencyCode),
+          ratio: e.value.total / maxIncome,
+          color: const Color(0xFF3BD188),
+          onTap: () => _openCategoryTransactions(
+            context: context,
+            monthRows: rows,
+            categoryKey: e.key,
+            kind: 'income',
+            categoryName: e.value.name,
+          ),
+        ),
+      ),
+    ];
   }
 
   Widget _metricRow(String title, String value, Color color, {bool emphasize = false}) {
@@ -940,6 +1117,14 @@ class _ReportSliceMeta {
   final List<MapEntry<String, ({String name, double total})>>? otherMembers;
 }
 
+String _pieSliceShortName(String name, int sliceCount) {
+  final t = name.trim();
+  if (t.isEmpty) return '—';
+  final maxChars = sliceCount > 5 ? 9 : sliceCount > 4 ? 11 : 14;
+  if (t.length <= maxChars) return t;
+  return '${t.substring(0, maxChars - 1)}…';
+}
+
 List<_ReportSliceMeta> _buildReportPieSlices(
   List<MapEntry<String, ({String name, double total})>> sorted,
 ) {
@@ -993,6 +1178,7 @@ class _ReportCategoryDonutChart extends StatefulWidget {
     required this.kind,
     required this.sorted,
     required this.currencyCode,
+    required this.onCenterTap,
     required this.onCategoryTap,
     required this.onOtherTap,
   });
@@ -1000,6 +1186,7 @@ class _ReportCategoryDonutChart extends StatefulWidget {
   final String kind;
   final List<MapEntry<String, ({String name, double total})>> sorted;
   final String currencyCode;
+  final VoidCallback onCenterTap;
   final void Function(String categoryKey, String name) onCategoryTap;
   final void Function(
           List<MapEntry<String, ({String name, double total})>> members)
@@ -1041,91 +1228,189 @@ class _ReportCategoryDonutChartState extends State<_ReportCategoryDonutChart> {
         final sectionRadius = (side * 0.36).clamp(48.0, 76.0);
         final centerHole = sectionRadius * 0.55;
 
-        return SizedBox(
-          width: constraints.maxWidth,
-          height: side,
-          child: Center(
-            child: SizedBox(
-              width: side,
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: constraints.maxWidth,
               height: side,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  PieChart(
-                    PieChartData(
-                      sectionsSpace: 1,
-                      centerSpaceRadius: centerHole,
-                      centerSpaceColor: Colors.transparent,
-                      sections: List.generate(metas.length, (i) {
-                        final touched = _touchedIndex == i;
-                        final meta = metas[i];
-                        return PieChartSectionData(
-                          color: colors[i],
-                          value: meta.value,
-                          title: '',
-                          radius: touched ? sectionRadius + 7 : sectionRadius,
-                          showTitle: false,
-                          borderSide: BorderSide(
-                            color: Colors.black.withValues(alpha: 0.18),
-                            width: touched ? 2 : 0.75,
-                          ),
-                        );
-                      }),
-                      pieTouchData: PieTouchData(
-                        touchCallback: (FlTouchEvent event, response) {
-                          if (!event.isInterestedForInteractions) {
-                            setState(() => _touchedIndex = -1);
-                            return;
-                          }
-                          final idx =
-                              response?.touchedSection?.touchedSectionIndex;
-                          if (idx != null) {
-                            setState(() => _touchedIndex = idx);
-                          }
-                          if (event is FlTapUpEvent) {
-                            final tapIdx =
-                                response?.touchedSection?.touchedSectionIndex;
-                            if (tapIdx != null &&
-                                tapIdx >= 0 &&
-                                tapIdx < metas.length) {
-                              final m = metas[tapIdx];
-                              final tail = m.otherMembers;
-                              if (tail != null && tail.isNotEmpty) {
-                                widget.onOtherTap(tail);
-                              } else {
-                                widget.onCategoryTap(m.categoryKey, m.name);
-                              }
-                            }
-                          }
-                        },
-                      ),
-                    ),
-                  ),
-                  IgnorePointer(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          formatMoney(total,
-                              currencyCode: widget.currencyCode),
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.w700,
+              child: Center(
+                child: SizedBox(
+                  width: side,
+                  height: side,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      PieChart(
+                        PieChartData(
+                          sectionsSpace: 1,
+                          centerSpaceRadius: centerHole,
+                          centerSpaceColor: Colors.transparent,
+                          sections: List.generate(metas.length, (i) {
+                            final touched = _touchedIndex == i;
+                            final meta = metas[i];
+                            final pct = total > 0
+                                ? (meta.value / total * 100)
+                                : 0.0;
+                            final showOnSlice = total > 0 &&
+                                (pct >= 3 || metas.length <= 3);
+                            final shortName =
+                                _pieSliceShortName(meta.name, metas.length);
+                            final titleStyle = TextStyle(
+                              fontSize: metas.length > 5 ? 9 : 10.5,
+                              height: 1.05,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white.withValues(alpha: 0.96),
+                              shadows: const [
+                                Shadow(
+                                  blurRadius: 4,
+                                  color: Color(0x99000000),
+                                  offset: Offset(0, 1),
+                                ),
+                              ],
+                            );
+                            final pctLabel = pct >= 10
+                                ? '${pct.round()}%'
+                                : '${pct.toStringAsFixed(1)}%';
+                            return PieChartSectionData(
+                              color: colors[i],
+                              value: meta.value,
+                              title: showOnSlice
+                                  ? '$shortName\n$pctLabel'
+                                  : '',
+                              titleStyle: titleStyle,
+                              titlePositionPercentageOffset: 0.58,
+                              radius:
+                                  touched ? sectionRadius + 7 : sectionRadius,
+                              showTitle: showOnSlice,
+                              borderSide: BorderSide(
+                                color: Colors.black.withValues(alpha: 0.18),
+                                width: touched ? 2 : 0.75,
                               ),
-                        ),
-                        Text(
-                          widget.kind == 'income' ? 'Income' : 'Expense',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.white.withValues(alpha: 0.5),
+                            );
+                          }),
+                          pieTouchData: PieTouchData(
+                            touchCallback: (FlTouchEvent event, response) {
+                              if (!event.isInterestedForInteractions) {
+                                setState(() => _touchedIndex = -1);
+                                return;
+                              }
+                              final idx =
+                                  response?.touchedSection?.touchedSectionIndex;
+                              if (idx != null) {
+                                setState(() => _touchedIndex = idx);
+                              }
+                              if (event is FlTapUpEvent) {
+                                final tapIdx = response
+                                    ?.touchedSection?.touchedSectionIndex;
+                                if (tapIdx != null &&
+                                    tapIdx >= 0 &&
+                                    tapIdx < metas.length) {
+                                  final m = metas[tapIdx];
+                                  final tail = m.otherMembers;
+                                  if (tail != null && tail.isNotEmpty) {
+                                    widget.onOtherTap(tail);
+                                  } else {
+                                    widget.onCategoryTap(
+                                        m.categoryKey, m.name);
+                                  }
+                                }
+                              }
+                            },
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: widget.onCenterTap,
+                          customBorder: const CircleBorder(),
+                          child: SizedBox(
+                            width: centerHole * 2,
+                            height: centerHole * 2,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  formatMoney(total,
+                                      currencyCode: widget.currencyCode),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleMedium
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                  textAlign: TextAlign.center,
+                                ),
+                                Text(
+                                  widget.kind == 'income'
+                                      ? 'Income'
+                                      : 'Expense',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.white.withValues(alpha: 0.5),
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'All categories',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color:
+                                        Colors.white.withValues(alpha: 0.42),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
-          ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 12, 4, 0),
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 14,
+                runSpacing: 8,
+                children: List.generate(metas.length, (i) {
+                  final m = metas[i];
+                  final pct =
+                      total > 0 ? (m.value / total * 100) : 0.0;
+                  final pctStr = pct >= 10
+                      ? '${pct.round()}%'
+                      : '${pct.toStringAsFixed(1)}%';
+                  return Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: colors[i],
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${m.name} · $pctStr',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withValues(alpha: 0.88),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  );
+                }),
+              ),
+            ),
+          ],
         );
       },
     );

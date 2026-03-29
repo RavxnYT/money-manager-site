@@ -7,6 +7,7 @@ import '../../core/currency/currency_utils.dart';
 import '../../core/config/business_features_config.dart';
 import '../../core/network/network_status_service.dart';
 import '../../core/ui/app_design_tokens.dart';
+import '../../core/ui/keep_alive_tab_page.dart';
 import '../../data/app_repository.dart';
 import '../dashboard/dashboard_screen.dart';
 import '../loans/loans_screen.dart';
@@ -33,6 +34,10 @@ class _HomeScreenState extends State<HomeScreen> {
   StreamSubscription<bool>? _networkSubscription;
   StreamSubscription<int>? _dataChangesSubscription;
   BusinessAccessState _businessAccess = const BusinessAccessState();
+  int _tabBodiesCacheKey = -1;
+  List<Widget> _cachedTabBodies = const [];
+  /// While non-null, `onPageChanged` from intermediate pages during [animateToPage] is ignored.
+  int? _programmaticPageTarget;
 
   static const _titlesPersonal = [
     'Overview',
@@ -194,26 +199,50 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
       _currentIndex = _currentIndex.clamp(0, _tabCount - 1);
+      _programmaticPageTarget = null;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_pageController.hasClients) return;
       final safe = _currentIndex.clamp(0, _tabCount - 1);
-      if (_pageController.page?.round() != safe) {
+      final page = _pageController.page;
+      final current = page != null ? page.round() : safe;
+      if (current != safe) {
         _pageController.jumpToPage(safe);
       }
     });
   }
 
-  Future<void> _onTabTapped(int index) async {
+  void _onTabTapped(int index) {
     if (_currentIndex == index) return;
-    setState(() => _currentIndex = index);
+    setState(() {
+      _currentIndex = index;
+      _programmaticPageTarget = index;
+    });
     if (_pageController.hasClients) {
-      await _pageController.animateToPage(
-        index,
-        duration: AppDesignTokens.quick,
-        curve: Curves.easeOutCubic,
-      );
+      _pageController
+          .animateToPage(
+            index,
+            duration: AppDesignTokens.tabPage,
+            curve: Curves.fastOutSlowIn,
+          )
+          .whenComplete(() {
+            if (!mounted) return;
+            setState(() => _programmaticPageTarget = null);
+          });
     }
+  }
+
+  void _onMainPageChanged(int value) {
+    if (!mounted) return;
+    final lock = _programmaticPageTarget;
+    if (lock != null && value != lock) return;
+    if (value == _currentIndex && lock == null) return;
+    setState(() {
+      _currentIndex = value;
+      if (lock != null) {
+        _programmaticPageTarget = null;
+      }
+    });
   }
 
   Widget _buildNavItem({
@@ -287,9 +316,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final pages = [
+  List<Widget> _createTabBodies() {
+    return [
       DashboardScreen(
         key: ValueKey('dashboard-$_dataRevision'),
         repository: widget.repository,
@@ -321,25 +349,31 @@ class _HomeScreenState extends State<HomeScreen> {
         repository: widget.repository,
       ),
     ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bodyCacheKey = Object.hash(_dataRevision, _showWorkspaceTab);
+    if (bodyCacheKey != _tabBodiesCacheKey) {
+      _tabBodiesCacheKey = bodyCacheKey;
+      _cachedTabBodies = _createTabBodies();
+    }
+    final pages = _cachedTabBodies;
 
     return Scaffold(
       appBar: AppBar(
-        title: AnimatedSwitcher(
-          duration: AppDesignTokens.quick,
-          child: Column(
-            key: ValueKey(_tabTitles[_currentIndex]),
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Money Management'),
-              Text(
-                _tabTitles[_currentIndex],
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: Colors.white70),
-              ),
-            ],
-          ),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Money Management'),
+            Text(
+              _tabTitles[_currentIndex],
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Colors.white70),
+            ),
+          ],
         ),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
@@ -409,16 +443,25 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
           ),
           Expanded(
-            child: PageView.builder(
-              controller: _pageController,
-              itemCount: _tabCount,
-              onPageChanged: (value) {
-                if (!mounted) return;
-                setState(() => _currentIndex = value);
-              },
-              itemBuilder: (context, index) => KeyedSubtree(
-                key: ValueKey('tab-$index-$_dataRevision'),
-                child: pages[index],
+            child: RepaintBoundary(
+              child: NotificationListener<UserScrollNotification>(
+                onNotification: (_) {
+                  if (_programmaticPageTarget == null) return false;
+                  setState(() => _programmaticPageTarget = null);
+                  return false;
+                },
+                child: PageView(
+                  key: const ValueKey('home-main-page-view'),
+                  controller: _pageController,
+                  onPageChanged: _onMainPageChanged,
+                  children: [
+                    for (var i = 0; i < pages.length; i++)
+                      KeepAliveTabPage(
+                        key: ValueKey('tab-$i-$_dataRevision'),
+                        child: pages[i],
+                      ),
+                  ],
+                ),
               ),
             ),
           ),

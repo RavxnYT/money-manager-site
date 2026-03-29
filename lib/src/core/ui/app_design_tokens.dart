@@ -29,6 +29,8 @@ class AppDesignTokens {
 
   static const Duration quick = Duration(milliseconds: 220);
   static const Duration medium = Duration(milliseconds: 360);
+  /// Main tab / PageView programmatic snap (Material motion).
+  static const Duration tabPage = Duration(milliseconds: 300);
   static const Duration slow = Duration(milliseconds: 520);
 
   static const Curve emphasizedCurve = Curves.easeOutCubic;

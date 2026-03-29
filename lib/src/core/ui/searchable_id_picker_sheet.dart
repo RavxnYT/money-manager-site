@@ -110,7 +110,7 @@ class _SearchableIdPickerBodyState extends State<_SearchableIdPickerBody> {
             ),
             TextField(
               controller: _search,
-              autofocus: true,
+              autofocus: false,
               decoration: InputDecoration(
                 hintText: widget.searchHint,
                 prefixIcon: const Icon(Icons.search, size: 22),
@@ -263,7 +263,7 @@ class _SearchableStringPickerBodyState extends State<_SearchableStringPickerBody
             ),
             TextField(
               controller: _search,
-              autofocus: true,
+              autofocus: false,
               decoration: InputDecoration(
                 hintText: widget.searchHint,
                 prefixIcon: const Icon(Icons.search, size: 22),

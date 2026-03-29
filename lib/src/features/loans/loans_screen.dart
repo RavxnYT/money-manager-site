@@ -4,6 +4,7 @@ import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/searchable_id_picker_sheet.dart';
 import '../../data/app_repository.dart';
 
 class LoansScreen extends StatefulWidget {
@@ -18,6 +19,269 @@ class LoansScreen extends StatefulWidget {
 class _LoansScreenState extends State<LoansScreen> {
   late Future<_LoansViewData> _future;
   String _currencyCode = 'USD';
+  final _searchController = TextEditingController();
+  String _directionFilter = 'all';
+  String _statusFilter = 'all';
+  String _sortLoans = 'name';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  double _loanPaid(Map<String, dynamic> loan, Map<String, double> paidByLoan) {
+    final id = loan['id']?.toString() ?? '';
+    return paidByLoan[id] ?? 0;
+  }
+
+  double _loanRemaining(
+      Map<String, dynamic> loan, Map<String, double> paidByLoan) {
+    final total = ((loan['total_amount'] as num?) ?? 0).toDouble();
+    final paid = _loanPaid(loan, paidByLoan);
+    return (total - paid).clamp(0, double.infinity);
+  }
+
+  bool _loanMatchesQuery(
+    Map<String, dynamic> loan,
+    String q,
+    Map<String, double> paidByLoan,
+  ) {
+    if (q.isEmpty) return true;
+    final person = (loan['person_name'] ?? '').toString().toLowerCase();
+    final note = (loan['note'] ?? '').toString().toLowerCase();
+    final currency = (loan['currency_code'] ?? '').toString().toLowerCase();
+    final due = (loan['due_date'] ?? '').toString().toLowerCase();
+    if (person.contains(q) ||
+        note.contains(q) ||
+        currency.contains(q) ||
+        due.contains(q)) {
+      return true;
+    }
+    final loanCur = (loan['currency_code'] ?? _currencyCode).toString();
+    final total = ((loan['total_amount'] as num?) ?? 0).toDouble();
+    final paid = _loanPaid(loan, paidByLoan);
+    final remaining = (total - paid).clamp(0, double.infinity);
+    final totalLabel = formatMoney(total, currencyCode: loanCur).toLowerCase();
+    final paidLabel = formatMoney(paid, currencyCode: loanCur).toLowerCase();
+    final remLabel =
+        formatMoney(remaining, currencyCode: loanCur).toLowerCase();
+    if (totalLabel.contains(q) ||
+        paidLabel.contains(q) ||
+        remLabel.contains(q)) {
+      return true;
+    }
+    final qAmt = q.replaceAll(',', '');
+    if (qAmt.isNotEmpty) {
+      if (total.toString().contains(qAmt) ||
+          paid.toString().contains(qAmt) ||
+          remaining.toString().contains(qAmt)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  List<Map<String, dynamic>> _filteredSortedLoans(
+    List<Map<String, dynamic>> loans,
+    Map<String, double> paidByLoan,
+  ) {
+    final search = _searchController.text.trim().toLowerCase();
+    var out = loans.where((l) {
+      final dir = (l['direction'] ?? '').toString();
+      if (_directionFilter != 'all' && dir != _directionFilter) {
+        return false;
+      }
+      final remaining = _loanRemaining(l, paidByLoan);
+      if (_statusFilter == 'active' && remaining <= 0) return false;
+      if (_statusFilter == 'paid_off' && remaining > 0) return false;
+      return _loanMatchesQuery(l, search, paidByLoan);
+    }).toList();
+
+    int byName(Map<String, dynamic> a, Map<String, dynamic> b) {
+      return (a['person_name'] ?? '')
+          .toString()
+          .toLowerCase()
+          .compareTo((b['person_name'] ?? '').toString().toLowerCase());
+    }
+
+    switch (_sortLoans) {
+      case 'remaining_desc':
+        out.sort((a, b) => _loanRemaining(b, paidByLoan)
+            .compareTo(_loanRemaining(a, paidByLoan)));
+        break;
+      case 'remaining_asc':
+        out.sort((a, b) => _loanRemaining(a, paidByLoan)
+            .compareTo(_loanRemaining(b, paidByLoan)));
+        break;
+      case 'total_desc':
+        out.sort((a, b) {
+          final ta = ((a['total_amount'] as num?) ?? 0).toDouble();
+          final tb = ((b['total_amount'] as num?) ?? 0).toDouble();
+          return tb.compareTo(ta);
+        });
+        break;
+      case 'total_asc':
+        out.sort((a, b) {
+          final ta = ((a['total_amount'] as num?) ?? 0).toDouble();
+          final tb = ((b['total_amount'] as num?) ?? 0).toDouble();
+          return ta.compareTo(tb);
+        });
+        break;
+      case 'name':
+      default:
+        out.sort(byName);
+        break;
+    }
+    return out;
+  }
+
+  Widget _loansFilterChrome(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _searchController,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(
+              labelText: 'Search name, note, currency, amounts, due date',
+              prefixIcon: Icon(Icons.search),
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'all', label: Text('All')),
+              ButtonSegment(
+                  value: 'owed_to_me', label: Text('They owe me')),
+              ButtonSegment(value: 'owed_by_me', label: Text('I owe them')),
+            ],
+            selected: {_directionFilter},
+            onSelectionChanged: (set) =>
+                setState(() => _directionFilter = set.first),
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            value: _statusFilter,
+            items: const [
+              DropdownMenuItem(value: 'all', child: Text('All statuses')),
+              DropdownMenuItem(value: 'active', child: Text('Active only')),
+              DropdownMenuItem(value: 'paid_off', child: Text('Paid off')),
+            ],
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => _statusFilter = value);
+            },
+            decoration: const InputDecoration(
+              labelText: 'Status',
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            value: _sortLoans,
+            items: const [
+              DropdownMenuItem(value: 'name', child: Text('Name (A–Z)')),
+              DropdownMenuItem(
+                  value: 'remaining_desc', child: Text('Remaining (high)')),
+              DropdownMenuItem(
+                  value: 'remaining_asc', child: Text('Remaining (low)')),
+              DropdownMenuItem(value: 'total_desc', child: Text('Total (high)')),
+              DropdownMenuItem(value: 'total_asc', child: Text('Total (low)')),
+            ],
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => _sortLoans = value);
+            },
+            decoration: const InputDecoration(
+              labelText: 'Sort',
+              isDense: true,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _loanAccountPickerLabel(String? id, List<Map<String, dynamic>> rows) {
+    if (id == null || id.isEmpty) return 'Select account';
+    for (final e in rows) {
+      if (e['id']?.toString() == id) return (e['name'] ?? '').toString();
+    }
+    return 'Select account';
+  }
+
+  Widget _loanSearchableAccountRow({
+    required BuildContext context,
+    required String label,
+    String? helperText,
+    required List<Map<String, dynamic>> accounts,
+    required String? selectedId,
+    required Future<void> Function() onPick,
+  }) {
+    final hintColor = Theme.of(context).hintColor;
+    final iconColor =
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
+    final text = _loanAccountPickerLabel(selectedId, accounts);
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: label,
+        helperText: helperText,
+      ),
+      child: InkWell(
+        onTap: accounts.isEmpty ? null : () => onPick(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  text,
+                  style: accounts.isEmpty ? TextStyle(color: hintColor) : null,
+                ),
+              ),
+              Icon(Icons.manage_search, size: 22, color: iconColor),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _loanSearchableCurrencyRow({
+    required BuildContext context,
+    required String label,
+    String? helperText,
+    required String selectedCode,
+    required Future<void> Function() onPick,
+  }) {
+    final display = supportedCurrencyCodes.contains(selectedCode)
+        ? selectedCode
+        : 'USD';
+    final iconColor =
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55);
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: label,
+        helperText: helperText,
+      ),
+      child: InkWell(
+        onTap: () => onPick(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
+          child: Row(
+            children: [
+              Expanded(child: Text(display)),
+              Icon(Icons.manage_search, size: 22, color: iconColor),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -156,31 +420,40 @@ class _LoansScreenState extends State<LoansScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                    value: amountInputCurrency,
-                    decoration: const InputDecoration(
-                      labelText: 'Amount is in',
-                      helperText: 'Converted to loan currency when you save',
-                    ),
-                    items: supportedCurrencyCodes
-                        .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null)
-                        setInnerState(() => amountInputCurrency = v);
+                  _loanSearchableCurrencyRow(
+                    context: context,
+                    label: 'Amount is in',
+                    helperText: 'Converted to loan currency when you save',
+                    selectedCode: amountInputCurrency,
+                    onPick: () async {
+                      final code = await showSearchableStringPickerSheet(
+                        context,
+                        title: 'Amount currency',
+                        searchHint: 'Search code (e.g. EUR)',
+                        values: supportedCurrencyCodes,
+                        selected: amountInputCurrency,
+                        matches: (v, q) => v.toLowerCase().contains(q),
+                      );
+                      if (code != null) {
+                        setInnerState(() => amountInputCurrency = code);
+                      }
                     },
                   ),
                   const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                    value: currencyCode,
-                    decoration: const InputDecoration(
-                      labelText: 'Loan currency',
-                      helperText: 'Stored balance uses this currency',
-                    ),
-                    items: supportedCurrencyCodes
-                        .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                        .toList(),
-                    onChanged: (v) {
+                  _loanSearchableCurrencyRow(
+                    context: context,
+                    label: 'Loan currency',
+                    helperText: 'Stored balance uses this currency',
+                    selectedCode: currencyCode,
+                    onPick: () async {
+                      final v = await showSearchableStringPickerSheet(
+                        context,
+                        title: 'Loan currency',
+                        searchHint: 'Search code (e.g. EUR)',
+                        values: supportedCurrencyCodes,
+                        selected: currencyCode,
+                        matches: (val, q) => val.toLowerCase().contains(q),
+                      );
                       if (v != null) {
                         setInnerState(() {
                           currencyCode = v;
@@ -211,31 +484,47 @@ class _LoansScreenState extends State<LoansScreen> {
                       ),
                     )
                   else
-                    DropdownButtonFormField<String>(
-                      value: matching.any(
+                    _loanSearchableAccountRow(
+                      context: context,
+                      label: direction == 'owed_to_me'
+                          ? 'Account (principal leaves here)'
+                          : 'Account (principal enters here)',
+                      accounts: matching,
+                      selectedId: matching.any(
                         (a) =>
                             a['id']?.toString() == selectedPrincipalAccountId,
                       )
                           ? selectedPrincipalAccountId
                           : matching.first['id']!.toString(),
-                      decoration: InputDecoration(
-                        labelText: direction == 'owed_to_me'
-                            ? 'Account (principal leaves here)'
-                            : 'Account (principal enters here)',
-                      ),
-                      items: matching
-                          .map(
-                            (a) => DropdownMenuItem(
-                              value: a['id']!.toString(),
-                              child: Text(
-                                '${a['name'] ?? 'Account'} • ${formatMoney(((a['current_balance'] as num?) ?? 0).toDouble(), currencyCode: currencyCode)}',
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (v) {
-                        if (v != null) {
-                          setInnerState(() => selectedPrincipalAccountId = v);
+                      onPick: () async {
+                        var sid = selectedPrincipalAccountId;
+                        if (!matching.any((a) => a['id']?.toString() == sid)) {
+                          sid = matching.first['id']!.toString();
+                          setInnerState(() => selectedPrincipalAccountId = sid);
+                        }
+                        final id = await showSearchableIdPickerSheet(
+                          context,
+                          title: direction == 'owed_to_me'
+                              ? 'Account (principal leaves here)'
+                              : 'Account (principal enters here)',
+                          searchHint: 'Search name or balance',
+                          items: matching,
+                          selectedId: sid,
+                          itemTitle: (a) =>
+                              '${a['name'] ?? 'Account'} • ${formatMoney(((a['current_balance'] as num?) ?? 0).toDouble(), currencyCode: currencyCode)}',
+                          matches: (row, q) {
+                            final name =
+                                (row['name'] ?? '').toString().toLowerCase();
+                            final bal = formatMoney(
+                              ((row['current_balance'] as num?) ?? 0)
+                                  .toDouble(),
+                              currencyCode: currencyCode,
+                            ).toLowerCase();
+                            return name.contains(q) || bal.contains(q);
+                          },
+                        );
+                        if (id != null) {
+                          setInnerState(() => selectedPrincipalAccountId = id);
                         }
                       },
                     ),
@@ -256,8 +545,9 @@ class _LoansScreenState extends State<LoansScreen> {
                           firstDate: DateTime(2000),
                           lastDate: DateTime(2100),
                         );
-                        if (picked != null)
+                        if (picked != null) {
                           setInnerState(() => dueDate = picked);
+                        }
                       },
                     ),
                   ),
@@ -408,25 +698,29 @@ class _LoansScreenState extends State<LoansScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              DropdownButtonFormField<String>(
-                value: selectedAccountId,
-                decoration: InputDecoration(
-                  labelText: direction == 'owed_to_me'
-                      ? 'Add money to account'
-                      : 'Pay from account',
-                ),
-                items: accounts
-                    .map(
-                      (e) => DropdownMenuItem<String>(
-                        value: e['id'].toString(),
-                        child: Text((e['name'] ?? '').toString()),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  setInnerState(() {
-                    selectedAccountId = value ?? selectedAccountId;
-                  });
+              _loanSearchableAccountRow(
+                context: context,
+                label: direction == 'owed_to_me'
+                    ? 'Add money to account'
+                    : 'Pay from account',
+                accounts: accounts,
+                selectedId: selectedAccountId,
+                onPick: () async {
+                  final id = await showSearchableIdPickerSheet(
+                    context,
+                    title: direction == 'owed_to_me'
+                        ? 'Add money to account'
+                        : 'Pay from account',
+                    searchHint: 'Search account name',
+                    items: accounts,
+                    selectedId: selectedAccountId,
+                    itemTitle: (e) => (e['name'] ?? '').toString(),
+                    matches: (row, q) =>
+                        (row['name'] ?? '').toString().toLowerCase().contains(q),
+                  );
+                  if (id != null) {
+                    setInnerState(() => selectedAccountId = id);
+                  }
                 },
               ),
               const SizedBox(height: 8),
@@ -442,23 +736,23 @@ class _LoansScreenState extends State<LoansScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                value: paymentInputCurrency,
-                decoration: const InputDecoration(
-                  labelText: 'Amount is in',
-                  helperText: 'Converted to loan currency before saving',
-                ),
-                items: supportedCurrencyCodes
-                    .map(
-                      (c) => DropdownMenuItem<String>(
-                        value: c,
-                        child: Text(c),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  if (value == null) return;
-                  setInnerState(() => paymentInputCurrency = value);
+              _loanSearchableCurrencyRow(
+                context: context,
+                label: 'Amount is in',
+                helperText: 'Converted to loan currency before saving',
+                selectedCode: paymentInputCurrency,
+                onPick: () async {
+                  final code = await showSearchableStringPickerSheet(
+                    context,
+                    title: 'Amount currency',
+                    searchHint: 'Search code (e.g. EUR)',
+                    values: supportedCurrencyCodes,
+                    selected: paymentInputCurrency,
+                    matches: (v, q) => v.toLowerCase().contains(q),
+                  );
+                  if (code != null) {
+                    setInnerState(() => paymentInputCurrency = code);
+                  }
                 },
               ),
               const SizedBox(height: 8),
@@ -475,8 +769,9 @@ class _LoansScreenState extends State<LoansScreen> {
                       firstDate: DateTime(2000),
                       lastDate: DateTime.now().add(const Duration(days: 365)),
                     );
-                    if (picked != null)
+                    if (picked != null) {
                       setInnerState(() => paymentDate = picked);
+                    }
                   },
                 ),
               ),
@@ -611,31 +906,36 @@ class _LoansScreenState extends State<LoansScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  value: totalInputCurrency,
-                  decoration: const InputDecoration(
-                    labelText: 'Amount is in',
-                    helperText: 'Converted to loan currency when you save',
-                  ),
-                  items: supportedCurrencyCodes
-                      .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v != null) setInnerState(() => totalInputCurrency = v);
+                _loanSearchableCurrencyRow(
+                  context: context,
+                  label: 'Amount is in',
+                  helperText: 'Converted to loan currency when you save',
+                  selectedCode: totalInputCurrency,
+                  onPick: () async {
+                    final code = await showSearchableStringPickerSheet(
+                      context,
+                      title: 'Amount currency',
+                      searchHint: 'Search code (e.g. EUR)',
+                      values: supportedCurrencyCodes,
+                      selected: totalInputCurrency,
+                      matches: (v, q) => v.toLowerCase().contains(q),
+                    );
+                    if (code != null) {
+                      setInnerState(() => totalInputCurrency = code);
+                    }
                   },
                 ),
                 const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  value: currencyCode,
+                InputDecorator(
                   decoration: const InputDecoration(
                     labelText: 'Loan currency',
                     helperText:
                         'Locked after creation to keep past transactions consistent',
                   ),
-                  items: supportedCurrencyCodes
-                      .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                      .toList(),
-                  onChanged: null,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
+                    child: Text(currencyCode),
+                  ),
                 ),
                 const SizedBox(height: 8),
                 ListTile(
@@ -791,10 +1091,11 @@ class _LoansScreenState extends State<LoansScreen> {
               final loans = data?.loans ?? [];
               final paidByLoan = data?.paidByLoan ?? <String, double>{};
 
-              final owedToMe = loans
+              final filtered = _filteredSortedLoans(loans, paidByLoan);
+              final owedToMe = filtered
                   .where((l) => (l['direction'] ?? '') == 'owed_to_me')
                   .toList();
-              final owedByMe = loans
+              final owedByMe = filtered
                   .where((l) => (l['direction'] ?? '') == 'owed_by_me')
                   .toList();
 
@@ -821,9 +1122,23 @@ class _LoansScreenState extends State<LoansScreen> {
                 );
               }
 
+              if (filtered.isEmpty) {
+                return ListView(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 100),
+                  children: [
+                    _loansFilterChrome(context),
+                    const SizedBox(height: 48),
+                    const Center(
+                      child: Text('No loans match your search or filters'),
+                    ),
+                  ],
+                );
+              }
+
               return ListView(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 100),
                 children: [
+                  _loansFilterChrome(context),
                   if (owedToMe.isNotEmpty) ...[
                     Padding(
                       padding: const EdgeInsets.symmetric(

@@ -3157,6 +3157,28 @@ class AppRepository {
     );
   }
 
+  Future<void> deleteSavingsGoal({required String goalId}) async {
+    final user = currentUser;
+    if (user == null) return;
+    final scope = await _activeWorkspaceScope();
+    try {
+      await _client.rpc(
+        'delete_savings_goal',
+        params: {
+          'p_user_id': user.id,
+          'p_organization_id': scope.organizationId,
+          'p_goal_id': goalId,
+        },
+      );
+      await _removeCachedKey(_savingsGoalsKey(scope: scope));
+      await _removeCachedKey(_savingsGoalContributionsKey(scope: scope));
+    } catch (error) {
+      if (!_isNetworkError(error)) rethrow;
+      throw Exception('Cannot delete savings goal while offline.');
+    }
+    _notifyDataChanged();
+  }
+
   Future<void> upsertBudget({
     required String categoryId,
     required DateTime monthStart,
@@ -3842,8 +3864,71 @@ class AppRepository {
         organizationId: scope.organizationId,
       );
       await _removeCachedKey(_loansKey(scope: scope));
+      await _removeCachedKey(_accountsKey(scope: scope));
+      await _removeCachedKey(_transactionsKey(scope: scope));
+      await _clearTransactionsMonthCaches();
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
+      final loansKey = _loansKey(scope: scope);
+      final accountsKey = _accountsKey(scope: scope);
+      final transactionsKey = _transactionsKey(scope: scope);
+
+      final loansBefore = await _readCachedList(loansKey);
+      double? oldPrincipalTotal;
+      String? principalAccountId;
+      for (final row in loansBefore) {
+        if (row['id']?.toString() != loanId) continue;
+        oldPrincipalTotal =
+            ((row['total_amount'] as num?) ?? 0).toDouble();
+        final pa = row['principal_account_id']?.toString();
+        principalAccountId =
+            (pa != null && pa.isNotEmpty) ? pa : null;
+        break;
+      }
+
+      final delta = oldPrincipalTotal != null
+          ? oldPrincipalTotal - totalAmount
+          : 0.0;
+      if (principalAccountId != null &&
+          oldPrincipalTotal != null &&
+          delta != 0) {
+        final accounts = await _readCachedList(accountsKey);
+        bool adjustedAccount = false;
+        for (final account in accounts) {
+          if (account['id']?.toString() != principalAccountId) continue;
+          final current =
+              ((account['current_balance'] as num?) ?? 0).toDouble();
+          final next = current + delta;
+          if (next < -1e-6) {
+            throw Exception(
+              'Insufficient balance in the principal account for this change.',
+            );
+          }
+          account['current_balance'] = next;
+          adjustedAccount = true;
+          break;
+        }
+        if (adjustedAccount) {
+          await _writeCachedList(accountsKey, accounts);
+        }
+
+        final transactions = await _readCachedList(transactionsKey);
+        var touchedPrincipalTx = false;
+        for (final t in transactions) {
+          if ((t['source_type']?.toString() ?? '') != 'loan_principal') {
+            continue;
+          }
+          if (t['source_ref_id']?.toString() != loanId) continue;
+          t['amount'] = totalAmount;
+          touchedPrincipalTx = true;
+          break;
+        }
+        if (touchedPrincipalTx) {
+          await _writeCachedList(transactionsKey, transactions);
+          await _clearTransactionsMonthCaches();
+        }
+      }
+
       await _enqueueOperation(
         _opUpdateLoan,
         await _payloadWithWorkspaceScope({
@@ -3857,7 +3942,7 @@ class AppRepository {
         }, scope: scope),
       );
 
-      final loans = await _readCachedList(_loansKey(scope: scope));
+      final loans = await _readCachedList(loansKey);
       for (final row in loans) {
         if (row['id']?.toString() != loanId) continue;
         row['person_name'] = personName;
@@ -3867,7 +3952,7 @@ class AppRepository {
         row['note'] = note?.trim().isEmpty == true ? null : note?.trim();
         row['due_date'] = dueDate?.toIso8601String();
       }
-      await _writeCachedList(_loansKey(scope: scope), loans);
+      await _writeCachedList(loansKey, loans);
     }
     _notifyDataChanged();
   }
