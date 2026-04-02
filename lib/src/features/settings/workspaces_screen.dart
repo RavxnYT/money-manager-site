@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/billing/business_access.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
@@ -189,7 +190,7 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
     );
     final name = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppAlertDialog(
         title: const Text('Rename business'),
         content: TextField(
           controller: controller,
@@ -226,7 +227,7 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
       );
       if (!mounted) return;
       await _reload();
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Business renamed.')),
       );
@@ -247,7 +248,7 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
 
     final ok = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppAlertDialog(
         title: const Text('Delete business workspace?'),
         content: Text(
           'Permanently delete "$label" and its data? '
@@ -279,7 +280,7 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
       );
       if (!mounted) return;
       await _reload();
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Deleted $label.')),
       );

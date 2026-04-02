@@ -2,21 +2,33 @@ import 'package:flutter/material.dart';
 
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
+import '../../core/finance/savings_goal_forecast.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/searchable_id_picker_sheet.dart';
 import '../../data/app_repository.dart';
 
 class SavingsScreen extends StatefulWidget {
-  const SavingsScreen({super.key, required this.repository});
+  const SavingsScreen({
+    super.key,
+    required this.repository,
+    this.embedInSavingsLoansHub = false,
+  });
 
   final AppRepository repository;
 
+  /// When true, only the scrollable body is built (no [Scaffold] / FAB). Used by the combined savings & loans hub.
+  final bool embedInSavingsLoansHub;
+
   @override
-  State<SavingsScreen> createState() => _SavingsScreenState();
+  State<SavingsScreen> createState() => SavingsScreenState();
 }
 
-class _SavingsScreenState extends State<SavingsScreen> {
+class SavingsScreenState extends State<SavingsScreen> {
+  /// Opens the same flow as the FAB (for host scaffolds that own the FAB).
+  void createGoal() => _createGoal();
+
   late Future<_SavingsViewData> _future;
   String _currencyCode = 'USD';
   final _searchController = TextEditingController();
@@ -44,6 +56,19 @@ class _SavingsScreenState extends State<SavingsScreen> {
       final id = row['id']?.toString();
       if (id == null || id.isEmpty || seen.contains(id)) continue;
       if (_normalizeCurrency(row['currency_code']) != code) continue;
+      seen.add(id);
+      out.add(row);
+    }
+    return out;
+  }
+
+  Future<List<Map<String, dynamic>>> _allAccountsDeduped() async {
+    final rows = await widget.repository.fetchAccounts(forceRefresh: true);
+    final seen = <String>{};
+    final out = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final id = row['id']?.toString();
+      if (id == null || id.isEmpty || seen.contains(id)) continue;
       seen.add(id);
       out.add(row);
     }
@@ -150,23 +175,27 @@ class _SavingsScreenState extends State<SavingsScreen> {
     final goals = await widget.repository.fetchSavingsGoals();
     final contributions = await widget.repository.fetchSavingsGoalContributions();
 
-    final cutoff = DateTime.now().subtract(const Duration(days: 90));
-    final sumByGoal = <String, double>{};
+    final byGoal = <String, List<Map<String, dynamic>>>{};
     for (final row in contributions) {
       final goalId = row['goal_id']?.toString();
       if (goalId == null || goalId.isEmpty) continue;
-      final createdAt = DateTime.tryParse((row['created_at'] ?? '').toString());
-      if (createdAt == null || createdAt.isBefore(cutoff)) continue;
-      final amount = ((row['amount'] as num?) ?? 0).toDouble();
-      sumByGoal[goalId] = (sumByGoal[goalId] ?? 0) + amount;
+      byGoal.putIfAbsent(goalId, () => []).add(row);
     }
 
-    final monthlyAvgByGoal = <String, double>{};
-    for (final e in sumByGoal.entries) {
-      monthlyAvgByGoal[e.key] = e.value / 3.0;
+    final forecastByGoal = <String, String>{};
+    for (final goal in goals) {
+      final id = goal['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+      final current = ((goal['current_amount'] as num?) ?? 0).toDouble();
+      final target = ((goal['target_amount'] as num?) ?? 0).toDouble();
+      forecastByGoal[id] = buildSavingsGoalForecastLine(
+        currentAmount: current,
+        targetAmount: target,
+        contributionRowsForGoal: byGoal[id] ?? const [],
+      );
     }
 
-    return _SavingsViewData(goals: goals, monthlyAvgByGoal: monthlyAvgByGoal);
+    return _SavingsViewData(goals: goals, forecastByGoal: forecastByGoal);
   }
 
   double _goalProgressRatio(Map<String, dynamic> goal) {
@@ -323,7 +352,8 @@ class _SavingsScreenState extends State<SavingsScreen> {
           const SizedBox(height: 8),
           if (currencies.isNotEmpty)
             DropdownButtonFormField<String>(
-              value: safeCurrency,
+              key: ValueKey('sav-ccy-$safeCurrency'),
+              initialValue: safeCurrency,
               items: currencyItems,
               onChanged: (value) {
                 if (value == null) return;
@@ -336,7 +366,8 @@ class _SavingsScreenState extends State<SavingsScreen> {
             ),
           if (currencies.isNotEmpty) const SizedBox(height: 8),
           DropdownButtonFormField<String>(
-            value: _sortSavings,
+            key: ValueKey('sav-sort-$_sortSavings'),
+            initialValue: _sortSavings,
             items: const [
               DropdownMenuItem(value: 'name', child: Text('Name (A–Z)')),
               DropdownMenuItem(
@@ -370,7 +401,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Create Savings Goal'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -508,13 +539,11 @@ class _SavingsScreenState extends State<SavingsScreen> {
       );
       return;
     }
-    final accounts = await _accountsForGoalCurrency(goalCurrency);
+    final accounts = await _allAccountsDeduped();
     if (!mounted) return;
     if (accounts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Create an account in $goalCurrency first to fund this goal.'),
-        ),
+        const SnackBar(content: Text('Please create an account first.')),
       );
       return;
     }
@@ -522,11 +551,12 @@ class _SavingsScreenState extends State<SavingsScreen> {
     var selectedAccountId = accounts.first['id']?.toString() ?? '';
     final amount = TextEditingController();
     final note = TextEditingController();
-    var inputCurrency = goalCurrency;
+    var inputCurrency = _normalizeCurrency(
+        accounts.first['currency_code'] ?? goalCurrency);
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Add Savings Progress'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -548,7 +578,16 @@ class _SavingsScreenState extends State<SavingsScreen> {
                         (row['name'] ?? '').toString().toLowerCase().contains(q),
                   );
                   if (id != null) {
-                    setInnerState(() => selectedAccountId = id);
+                    setInnerState(() {
+                      selectedAccountId = id;
+                      for (final a in accounts) {
+                        if (a['id']?.toString() == id) {
+                          inputCurrency =
+                              _normalizeCurrency(a['currency_code']);
+                          break;
+                        }
+                      }
+                    });
                   }
                 },
               ),
@@ -567,7 +606,8 @@ class _SavingsScreenState extends State<SavingsScreen> {
               _savingsSearchableCurrencyRow(
                 context: context,
                 label: 'Amount is in',
-                helperText: 'Converted to goal currency before saving',
+                helperText:
+                    'Converted to goal currency for progress; the account is debited in its own currency',
                 selectedCode: inputCurrency,
                 onPick: () async {
                   final code = await showSearchableStringPickerSheet(
@@ -621,11 +661,28 @@ class _SavingsScreenState extends State<SavingsScreen> {
           );
           return;
         }
+        Map<String, dynamic>? selectedAccountRow;
+        for (final a in accounts) {
+          if (a['id']?.toString() == selectedAccountId) {
+            selectedAccountRow = a;
+            break;
+          }
+        }
+        final accountCur = _normalizeCurrency(
+            selectedAccountRow?['currency_code'] ?? goalCurrency);
+        final double? accountDebit = accountCur == goalCurrency
+            ? null
+            : await widget.repository.convertAmountBetweenCurrencies(
+                amount: inGoalCurrency,
+                fromCurrency: goalCurrency,
+                toCurrency: accountCur,
+              );
         await widget.repository.addSavingsProgress(
           goalId: goalId,
           amount: inGoalCurrency,
           accountId: selectedAccountId,
           note: note.text.trim().isEmpty ? null : note.text.trim(),
+          accountAmount: accountDebit,
         );
         _reload();
       } catch (e) {
@@ -634,6 +691,208 @@ class _SavingsScreenState extends State<SavingsScreen> {
           SnackBar(content: Text(friendlyErrorMessage(e))),
         );
       }
+    }
+  }
+
+  Future<void> _transferGoalToLoan(Map<String, dynamic> goal) async {
+    final goalId = goal['id']?.toString() ?? '';
+    if (goalId.isEmpty) return;
+    final goalCurrency =
+        _normalizeCurrency(goal['currency_code'] ?? _currencyCode);
+    final saved = ((goal['current_amount'] as num?) ?? 0).toDouble();
+    if (saved <= 0) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No balance in this goal to move.')),
+      );
+      return;
+    }
+
+    final loansAll = await widget.repository.fetchLoans();
+    if (!mounted) return;
+    final loans = loansAll
+        .where((l) =>
+            _normalizeCurrency(l['currency_code'] ?? '') == goalCurrency)
+        .toList();
+    if (loans.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Add a loan in $goalCurrency to send money from this goal.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final bridgeAccounts = await _accountsForGoalCurrency(goalCurrency);
+    if (!mounted) return;
+    if (bridgeAccounts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Create an account in $goalCurrency for funds to pass through.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    String loanPickerLine(Map<String, dynamic> l) {
+      final dir = (l['direction'] ?? '').toString();
+      final tag = dir == 'owed_to_me' ? 'They owe me' : 'I owe them';
+      return '${(l['person_name'] ?? '').toString()} • $tag';
+    }
+
+    final loanRows = <Map<String, dynamic>>[
+      for (final l in loans) {...l, 'name': loanPickerLine(l)},
+    ];
+
+    var selectedLoanId = loans.first['id']?.toString() ?? '';
+    var bridgeId = bridgeAccounts.first['id']?.toString() ?? '';
+    final amountCtl = TextEditingController();
+    final noteCtl = TextEditingController();
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setInnerState) => AppAlertDialog(
+          title: const Text('Send to loan'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Uses your saved amount toward a loan. '
+                  'Choose a loan and an account in $goalCurrency (money routes through the account).',
+                  style: TextStyle(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withValues(alpha: 0.72),
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _savingsSearchableAccountRow(
+                  context: context,
+                  label: 'Loan',
+                  helperText: 'They owe me or I owe them',
+                  accounts: loanRows,
+                  selectedId: selectedLoanId,
+                  onPick: () async {
+                    final id = await showSearchableIdPickerSheet(
+                      context,
+                      title: 'Loan',
+                      searchHint: 'Search by person',
+                      items: loanRows,
+                      selectedId: selectedLoanId,
+                      itemTitle: (e) => (e['name'] ?? '').toString(),
+                      matches: (row, q) {
+                        final name =
+                            (row['person_name'] ?? '').toString().toLowerCase();
+                        return name.contains(q);
+                      },
+                    );
+                    if (id != null) setInnerState(() => selectedLoanId = id);
+                  },
+                ),
+                const SizedBox(height: 8),
+                _savingsSearchableAccountRow(
+                  context: context,
+                  label: 'Through account',
+                  helperText: 'Same currency as the goal',
+                  accounts: bridgeAccounts,
+                  selectedId: bridgeId,
+                  onPick: () async {
+                    final id = await showSearchableIdPickerSheet(
+                      context,
+                      title: 'Through account',
+                      searchHint: 'Search account',
+                      items: bridgeAccounts,
+                      selectedId: bridgeId,
+                      itemTitle: (e) => (e['name'] ?? '').toString(),
+                      matches: (row, q) =>
+                          (row['name'] ?? '')
+                              .toString()
+                              .toLowerCase()
+                              .contains(q),
+                    );
+                    if (id != null) setInnerState(() => bridgeId = id);
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: amountCtl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [AmountInputFormatter()],
+                  decoration: InputDecoration(
+                    labelText: 'Amount ($goalCurrency)',
+                    hintText:
+                        'Available: ${formatMoney(saved, currencyCode: goalCurrency)}',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: noteCtl,
+                  decoration:
+                      const InputDecoration(labelText: 'Note (optional)'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Transfer'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final parsed = parseFormattedAmount(amountCtl.text);
+    if (ok != true || parsed == null || parsed <= 0) return;
+    final rounded = (parsed * 100).round() / 100;
+    if (rounded > saved + 1e-9) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Amount exceeds saved balance (${formatMoney(saved, currencyCode: goalCurrency)}).',
+          ),
+        ),
+      );
+      return;
+    }
+
+    try {
+      await widget.repository.executeEntityTransfer(
+        fromKind: 'savings_goal',
+        fromId: goalId,
+        toKind: 'loan',
+        toId: selectedLoanId,
+        amount: rounded,
+        bridgeAccountId: bridgeId,
+        transactionDate: DateTime.now(),
+        note: noteCtl.text.trim().isEmpty ? null : noteCtl.text.trim(),
+      );
+      _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Transfer completed')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(e))),
+      );
     }
   }
 
@@ -649,7 +908,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Edit Savings Goal'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -797,7 +1056,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Delete savings goal'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -914,7 +1173,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: Text('Refund Savings • $goalName'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1028,28 +1287,34 @@ class _SavingsScreenState extends State<SavingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: AppPageScaffold(
-        child: RefreshIndicator(
-          onRefresh: _reload,
-          child: FutureBuilder<_SavingsViewData>(
-            future: _future,
-            builder: (context, snapshot) {
+    final bottomInset = widget.embedInSavingsLoansHub ? 88.0 : 108.0;
+    final body = AppPageScaffold(
+      child: RefreshIndicator(
+        onRefresh: _reload,
+        child: FutureBuilder<_SavingsViewData>(
+          future: _future,
+          builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             }
             if (snapshot.hasError) {
-              return ListView(children: [Center(child: Text(friendlyErrorMessage(snapshot.error)))]);
+              return ListView(children: [
+                Center(child: Text(friendlyErrorMessage(snapshot.error))),
+              ]);
             }
             final items = snapshot.data?.goals ?? [];
-            final monthlyAvgByGoal = snapshot.data?.monthlyAvgByGoal ?? <String, double>{};
+            final forecastByGoal =
+                snapshot.data?.forecastByGoal ?? <String, String>{};
             if (items.isEmpty) {
-              return ListView(children: const [SizedBox(height: 120), Center(child: Text('No savings goals yet'))]);
+              return ListView(children: const [
+                SizedBox(height: 120),
+                Center(child: Text('No savings goals yet')),
+              ]);
             }
             final filtered = _filteredSortedGoals(items);
             if (filtered.isEmpty) {
               return ListView(
-                padding: const EdgeInsets.only(bottom: 108),
+                padding: EdgeInsets.only(bottom: bottomInset),
                 children: [
                   _savingsFilterChrome(context, items),
                   const SizedBox(height: 48),
@@ -1060,7 +1325,7 @@ class _SavingsScreenState extends State<SavingsScreen> {
               );
             }
             return ListView.builder(
-              padding: const EdgeInsets.only(bottom: 108),
+              padding: EdgeInsets.only(bottom: bottomInset),
               itemCount: filtered.length + 1,
               itemBuilder: (context, index) {
                 if (index == 0) {
@@ -1071,19 +1336,19 @@ class _SavingsScreenState extends State<SavingsScreen> {
                 final target = (item['target_amount'] as num?) ?? 1;
                 final goalCurrency =
                     (item['currency_code'] ?? _currencyCode).toString().toUpperCase();
-                final progress = (current / (target == 0 ? 1 : target)).clamp(0, 1).toDouble();
+                final progress =
+                    (current / (target == 0 ? 1 : target)).clamp(0, 1).toDouble();
                 final goalId = item['id']?.toString() ?? '';
-                final monthlyAvg = monthlyAvgByGoal[goalId] ?? 0;
-                final remaining = (target - current).toDouble();
-                final monthsToGoal = monthlyAvg > 0 ? (remaining / monthlyAvg) : -1;
-                final forecastText = monthsToGoal <= 0
-                    ? 'Forecast unavailable (add more contributions)'
-                    : 'Forecast: about ${monthsToGoal.ceil()} month(s) to reach goal';
+                final forecastText =
+                    forecastByGoal[goalId] ?? 'Forecast: add contributions to estimate';
                 return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  margin:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    title: Text(item['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600)),
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    title: Text(item['name'] as String? ?? '',
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -1103,7 +1368,8 @@ class _SavingsScreenState extends State<SavingsScreen> {
                         const SizedBox(height: 6),
                         Text(
                           forecastText,
-                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 12),
                         ),
                       ],
                     ),
@@ -1121,6 +1387,8 @@ class _SavingsScreenState extends State<SavingsScreen> {
                               _editGoal(item);
                             } else if (value == 'refund') {
                               _refundProgress(item);
+                            } else if (value == 'to_loan') {
+                              _transferGoalToLoan(item);
                             } else if (value == 'delete') {
                               _deleteGoal(item);
                             }
@@ -1139,6 +1407,11 @@ class _SavingsScreenState extends State<SavingsScreen> {
                                 enabled: hasBalance,
                                 child: const Text('Refund to account'),
                               ),
+                              PopupMenuItem<String>(
+                                value: 'to_loan',
+                                enabled: hasBalance,
+                                child: const Text('Send to loan…'),
+                              ),
                               const PopupMenuItem<String>(
                                 value: 'delete',
                                 child: Text('Delete goal'),
@@ -1152,10 +1425,16 @@ class _SavingsScreenState extends State<SavingsScreen> {
                 );
               },
             );
-            },
-          ),
+          },
         ),
       ),
+    );
+
+    if (widget.embedInSavingsLoansHub) {
+      return body;
+    }
+    return Scaffold(
+      body: body,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createGoal,
         icon: const Icon(Icons.add),
@@ -1168,9 +1447,9 @@ class _SavingsScreenState extends State<SavingsScreen> {
 class _SavingsViewData {
   _SavingsViewData({
     required this.goals,
-    required this.monthlyAvgByGoal,
+    required this.forecastByGoal,
   });
 
   final List<Map<String, dynamic>> goals;
-  final Map<String, double> monthlyAvgByGoal;
+  final Map<String, String> forecastByGoal;
 }

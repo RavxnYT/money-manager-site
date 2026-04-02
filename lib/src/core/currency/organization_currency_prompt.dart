@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../ui/app_alert_dialog.dart';
 import '../../data/app_repository.dart';
 import 'currency_utils.dart';
 
@@ -15,7 +16,7 @@ Future<void> promptChooseOrganizationCurrency({
     barrierDismissible: false,
     builder: (dialogContext) => StatefulBuilder(
       builder: (context, setInnerState) {
-        return AlertDialog(
+        return AppAlertDialog(
           title: const Text('Business default currency'),
           content: SizedBox(
             width: double.maxFinite,

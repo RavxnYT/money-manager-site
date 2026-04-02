@@ -2,8 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/billing/business_access.dart';
-import '../../core/ui/workspace_ui_theme.dart';
+import '../../core/ui/business_workspace_theme.dart';
 import '../../data/app_repository.dart';
 import 'business_home_screen.dart';
 import 'home_screen.dart';
@@ -27,6 +28,7 @@ class ModeRouterScreen extends StatefulWidget {
 class _ModeRouterScreenState extends State<ModeRouterScreen>
     with WidgetsBindingObserver {
   StreamSubscription<int>? _dataChangesSubscription;
+  StreamSubscription<int>? _businessProLapsedSubscription;
   Timer? _modeReloadDebounce;
   Timer? _periodicSyncTimer;
   bool _loading = true;
@@ -41,6 +43,14 @@ class _ModeRouterScreenState extends State<ModeRouterScreen>
     _dataChangesSubscription = widget.repository.dataChanges.listen((_) {
       _scheduleLoadMode();
     });
+    _businessProLapsedSubscription =
+        widget.repository.businessProLapsed.listen((_) {
+      if (!mounted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _showBusinessProEndedDialog();
+      });
+    });
     if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
       _startPeriodicSync();
     }
@@ -52,7 +62,27 @@ class _ModeRouterScreenState extends State<ModeRouterScreen>
     WidgetsBinding.instance.removeObserver(this);
     _modeReloadDebounce?.cancel();
     _dataChangesSubscription?.cancel();
+    _businessProLapsedSubscription?.cancel();
     super.dispose();
+  }
+
+  void _showBusinessProEndedDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AppAlertDialog(
+        title: const Text('Business Pro ended'),
+        content: const Text(
+          'Your Business Pro subscription is no longer active. '
+          'You have been switched to your personal workspace.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -129,51 +159,6 @@ class _ModeRouterScreenState extends State<ModeRouterScreen>
     }
   }
 
-  ThemeData _businessWorkspaceTheme(BuildContext context) {
-    final base = Theme.of(context);
-    const accent = WorkspaceUiTheme.accentGreen;
-    final scheme = ColorScheme.fromSeed(
-      seedColor: accent,
-      brightness: Brightness.dark,
-    );
-    final input = base.inputDecorationTheme;
-    return base.copyWith(
-      colorScheme: scheme,
-      scaffoldBackgroundColor: const Color(0xFF060F0C),
-      extensions: [WorkspaceUiTheme.business],
-      cardTheme: base.cardTheme.copyWith(
-        color: const Color(0xFF111F1A),
-      ),
-      filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          backgroundColor: accent,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        ),
-      ),
-      floatingActionButtonTheme: const FloatingActionButtonThemeData(
-        backgroundColor: accent,
-        foregroundColor: Colors.white,
-      ),
-      inputDecorationTheme: input.copyWith(
-        fillColor: const Color(0xFF122620),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: accent.withValues(alpha: 0.9)),
-        ),
-      ),
-      snackBarTheme: base.snackBarTheme.copyWith(
-        backgroundColor: const Color(0xFF152923),
-      ),
-      navigationBarTheme: base.navigationBarTheme.copyWith(
-        indicatorColor: accent.withValues(alpha: 0.35),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -191,7 +176,7 @@ class _ModeRouterScreenState extends State<ModeRouterScreen>
             repository: widget.repository,
           );
       return Theme(
-        data: _businessWorkspaceTheme(context),
+        data: businessWorkspaceThemeData(Theme.of(context)),
         child: shell,
       );
     }

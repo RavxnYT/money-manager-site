@@ -6,11 +6,16 @@ import '../../core/config/business_features_config.dart';
 import '../../core/billing/business_entitlement_service.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/business_workspace_theme_scope.dart';
 import '../../data/app_repository.dart';
 import '../accounts/accounts_screen.dart';
+import '../onboarding/app_walkthrough_screen.dart';
+import '../finance_insights/finance_insights_screen.dart';
 import '../categories/categories_screen.dart';
 import '../security/security_screen.dart';
+import 'business_mode_flow.dart';
 import 'workspaces_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -83,7 +88,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Default Currency'),
           content: DropdownButtonFormField<String>(
             initialValue: selected,
@@ -125,7 +130,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Delete My Data'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -242,9 +247,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _onBuyBusinessAccess() async {
     if (_businessToggleBusy) return;
+    final billing = BusinessEntitlementService.instance;
+    if (!billing.canPresentNativePaywall) {
+      if (billing.isDesktopWithoutStoreSdk) {
+        if (!mounted) return;
+        await BusinessModeFlow.showDesktopBusinessProHint(context);
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              billing.lastError ?? 'Billing is not configured on this device.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
     setState(() => _businessToggleBusy = true);
     try {
-      await BusinessEntitlementService.instance.presentPaywallForExplicitUpgrade();
+      await billing.presentPaywallForExplicitUpgrade();
       await widget.repository.refreshBusinessEntitlement();
       if (!mounted) return;
       await _loadSettingsData();
@@ -261,6 +284,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Green chrome only for Business Pro users in an organization workspace.
+  Widget _businessChromeScoped(Widget child) {
+    return BusinessWorkspaceThemeScope(
+      repository: widget.repository,
+      child: child,
+    );
+  }
+
   Widget _buildBusinessAccessCard(BuildContext context) {
     const accent = Color(0xFF3BD188);
     if (_businessAccess.entitlementActive) {
@@ -271,7 +302,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           onTap: () {
             Navigator.of(context).push(
               MaterialPageRoute<void>(
-                builder: (_) => WorkspacesScreen(repository: widget.repository),
+                builder: (_) => _businessChromeScoped(
+                  WorkspacesScreen(repository: widget.repository),
+                ),
               ),
             ).then((_) => _loadSettingsData());
           },
@@ -479,7 +512,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => AccountsScreen(repository: widget.repository),
+                  builder: (_) => _businessChromeScoped(
+                    AccountsScreen(repository: widget.repository),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.auto_graph_rounded),
+            title: const Text('Finance insights'),
+            subtitle: const Text(
+              'Safe to spend, cash flow, digest, goals, P&L, exports',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => _businessChromeScoped(
+                    FinanceInsightsScreen(repository: widget.repository),
+                  ),
                 ),
               );
             },
@@ -498,7 +552,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => CategoriesScreen(repository: widget.repository),
+                  builder: (_) => _businessChromeScoped(
+                    CategoriesScreen(repository: widget.repository),
+                  ),
                 ),
               );
             },
@@ -515,8 +571,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) =>
-                        WorkspacesScreen(repository: widget.repository),
+                    builder: (_) => _businessChromeScoped(
+                      WorkspacesScreen(repository: widget.repository),
+                    ),
                   ),
                 ).then((_) => _loadSettingsData());
               },
@@ -542,6 +599,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         Card(
           child: ListTile(
+            leading: const Icon(Icons.slideshow_outlined),
+            title: const Text('App walkthrough'),
+            subtitle: const Text(
+              'Replay the quick tour: transactions, accounts, categories, savings & loans',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => AppWalkthroughScreen.openReplay(context),
+          ),
+        ),
+        Card(
+          child: ListTile(
             leading: const Icon(Icons.lock_outline_rounded),
             title: const Text('Security Lock'),
             subtitle: const Text('Passcode lock preferences'),
@@ -549,7 +617,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => const SecurityScreen(),
+                  builder: (_) =>
+                      _businessChromeScoped(const SecurityScreen()),
                 ),
               );
             },

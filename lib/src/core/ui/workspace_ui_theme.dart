@@ -24,10 +24,11 @@ class WorkspaceUiTheme extends ThemeExtension<WorkspaceUiTheme> {
       begin: Alignment.topLeft,
       end: Alignment.bottomRight,
     ),
-    glassGradientColors: const [Color(0xCC14332A), Color(0xAA0D1F18)],
+    glassGradientColors: const [Color(0xCC103028), Color(0xAA0A1814)],
   );
 
   final LinearGradient pageGradient;
+  /// Retained for API shape; [GlassPanel] uses frosted blur instead of these fills.
   final List<Color> glassGradientColors;
   final Color glassStroke;
 

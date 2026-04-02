@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/billing/business_entitlement_service.dart';
 import '../../core/config/business_features_config.dart';
 import '../../core/currency/organization_currency_prompt.dart';
@@ -7,6 +9,40 @@ import '../../data/app_repository.dart';
 
 class BusinessModeFlow {
   static const _createBusinessChoice = '__create_business__';
+  static const _playStoreUrl =
+      'https://play.google.com/store/apps/details?id=com.ravxn.moneymanagement';
+
+  /// RevenueCat paywalls only run on Android / iOS; desktop opens this hint instead.
+  static Future<void> showDesktopBusinessProHint(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AppAlertDialog(
+        title: const Text('Get Business Pro on mobile'),
+        content: const Text(
+          'Purchases use Google Play or the App Store. Install this app on your '
+          'Android phone or iPhone, sign in with the same account, then subscribe '
+          'there. Billing screens are not available on Windows, macOS, or Linux.\n\n'
+          'You can open the Play Store listing below on this PC.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final uri = Uri.parse(_playStoreUrl);
+              if (await canLaunchUrl(uri)) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              }
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Google Play'),
+          ),
+        ],
+      ),
+    );
+  }
 
   static Future<bool> enableBusinessMode({
     required BuildContext context,
@@ -27,6 +63,8 @@ class BusinessModeFlow {
         )
         .toList();
 
+    if (!context.mounted) return false;
+
     if (organizations.isEmpty) {
       return createBusinessWorkspace(
         context: context,
@@ -43,6 +81,8 @@ class BusinessModeFlow {
         organizationId: organizationId,
       );
     }
+
+    if (!context.mounted) return false;
 
     final selection = await _pickBusinessWorkspace(
       context: context,
@@ -138,7 +178,7 @@ class BusinessModeFlow {
     final result = await showDialog<String>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Create Business'),
           content: TextField(
             controller: controller,
@@ -185,7 +225,23 @@ class BusinessModeFlow {
     var access = await repository.fetchBusinessAccessState();
     if (access.entitlementActive) return true;
 
-    await BusinessEntitlementService.instance.presentPaywallForExplicitUpgrade();
+    final billing = BusinessEntitlementService.instance;
+    if (!billing.canPresentNativePaywall) {
+      if (billing.isDesktopWithoutStoreSdk && context.mounted) {
+        await showDesktopBusinessProHint(context);
+      } else if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              billing.lastError ?? 'Billing is not configured on this device.',
+            ),
+          ),
+        );
+      }
+      return false;
+    }
+
+    await billing.presentPaywallForExplicitUpgrade();
     await repository.refreshBusinessEntitlement();
     access = await repository.fetchBusinessAccessState();
     if (access.entitlementActive) return true;
@@ -208,7 +264,7 @@ class BusinessModeFlow {
   }) async {
     return showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppAlertDialog(
         title: const Text('Choose Business'),
         content: SizedBox(
           width: 360,

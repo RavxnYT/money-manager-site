@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -6,13 +8,25 @@ import '../../core/categories/category_icon_utils.dart';
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/currency/exchange_rate_service.dart';
+import '../../core/finance/category_correction_learning.dart';
+import '../../core/finance/dashboard_insight_feed.dart';
+import '../../core/finance/financial_health_score.dart';
+import '../../core/finance/money_personality.dart';
+import '../../core/finance/projected_cash_flow.dart';
+import '../../core/finance/smart_finance_signals.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/animated_appear.dart';
+import '../../core/ui/app_alert_dialog.dart';
+import '../../core/ui/app_design_tokens.dart';
 import '../../core/ui/app_page_scaffold.dart';
+import '../../core/ui/business_workspace_theme_scope.dart';
 import '../../core/ui/glass_panel.dart';
 import '../../core/ui/searchable_id_picker_sheet.dart';
+import '../../core/ui/workspace_ui_theme.dart';
 import '../../core/usage/transaction_creation_usage_store.dart';
 import '../../data/app_repository.dart';
+import '../finance_insights/finance_insights_screen.dart';
+import 'financial_health_detail_sheet.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, required this.repository});
@@ -28,12 +42,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String _currencyCode = 'USD';
   List<String> _accountOrder = const [];
   bool _isReorderingAccounts = false;
+  StreamSubscription<int>? _dataChangesSub;
+  Timer? _reloadDebounce;
 
   @override
   void initState() {
     super.initState();
     _loadCurrency();
     _future = _loadData();
+    _dataChangesSub = widget.repository.dataChanges.listen((_) {
+      _reloadDebounce?.cancel();
+      _reloadDebounce = Timer(const Duration(milliseconds: 400), () {
+        if (!mounted) return;
+        setState(() {
+          _future = _loadData();
+        });
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _reloadDebounce?.cancel();
+    _dataChangesSub?.cancel();
+    super.dispose();
+  }
+
+  /// Sky blue in personal mode; Business Pro green in org workspace shell.
+  Color _workspaceChromeAccent(BuildContext context) {
+    final w = Theme.of(context).extension<WorkspaceUiTheme>();
+    return w != null ? WorkspaceUiTheme.accentGreen : const Color(0xFF7DD3FC);
   }
 
   Future<void> _loadCurrency() async {
@@ -43,11 +81,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<_DashboardData> _loadData() async {
-    final month = DateTime.now();
+    final now = DateTime.now();
+    final month = now;
+    final weekEnd = DateTime(now.year, now.month, now.day);
+    final weekStart = weekEnd.subtract(const Duration(days: 7));
+    final prevWeekStart = weekStart.subtract(const Duration(days: 7));
+    final prevCalMonth = DateTime(now.year, now.month - 1);
+    final m2 = DateTime(now.year, now.month - 2);
+    final m3 = DateTime(now.year, now.month - 3);
+
     final accountsFuture = widget.repository.fetchAccounts();
     final monthTxFuture = widget.repository.fetchTransactionsForMonth(month);
     final goalsFuture = widget.repository.fetchSavingsGoals();
     final displayCurrencyFuture = widget.repository.fetchUserCurrencyCode();
+    final billsFuture = widget.repository.fetchBillReminders();
+    final recurringFuture = widget.repository.fetchRecurringTransactions();
+    final prevMonthTxFuture =
+        widget.repository.fetchTransactionsForMonth(prevCalMonth);
+    final m2TxFuture = widget.repository.fetchTransactionsForMonth(m2);
+    final m3TxFuture = widget.repository.fetchTransactionsForMonth(m3);
+    final weekTxFuture = widget.repository.fetchTransactionsBetween(
+      startLocal: weekStart,
+      endLocal: weekEnd,
+    );
+    final prevWeekTxFuture = widget.repository.fetchTransactionsBetween(
+      startLocal: prevWeekStart,
+      endLocal: weekStart.subtract(const Duration(days: 1)),
+    );
+    final pendingFuture = widget.repository.pendingOperationsCount();
+    final learningFuture = CategoryCorrectionLearning.fetchSurfaceStats();
 
     final accounts = await accountsFuture;
     final monthTx = await monthTxFuture;
@@ -126,6 +188,150 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     final savedOrder = await _loadSavedAccountOrder();
 
+    final secondary = await Future.wait<Object?>([
+      billsFuture,
+      recurringFuture,
+      prevMonthTxFuture,
+      m2TxFuture,
+      m3TxFuture,
+      weekTxFuture,
+      prevWeekTxFuture,
+      pendingFuture,
+      learningFuture,
+    ]);
+    final bills =
+        List<Map<String, dynamic>>.from(secondary[0]! as List<dynamic>);
+    final recurring =
+        List<Map<String, dynamic>>.from(secondary[1]! as List<dynamic>);
+    final prevMonthTx =
+        List<Map<String, dynamic>>.from(secondary[2]! as List<dynamic>);
+    final monthTxM2 =
+        List<Map<String, dynamic>>.from(secondary[3]! as List<dynamic>);
+    final monthTxM3 =
+        List<Map<String, dynamic>>.from(secondary[4]! as List<dynamic>);
+    final weekTx =
+        List<Map<String, dynamic>>.from(secondary[5]! as List<dynamic>);
+    final prevWeekTx =
+        List<Map<String, dynamic>>.from(secondary[6]! as List<dynamic>);
+    final pendingSyncCount = secondary[7]! as int;
+    final learningStats = secondary[8]! as CategoryLearningSurfaceStats;
+
+    final horizonEnd = weekEnd.add(const Duration(days: 30));
+    final projected = CashFlowProjection.project(
+      windowStart: weekEnd,
+      windowEnd: horizonEnd,
+      bills: bills,
+      recurring: recurring,
+    );
+    final billById = {for (final b in bills) (b['id']?.toString() ?? ''): b};
+    final recById = {for (final r in recurring) (r['id']?.toString() ?? ''): r};
+    var projectedOutflows30d = 0.0;
+    for (final e in projected) {
+      if (!e.isOutflow) continue;
+      final abs = e.amountSigned.abs();
+      var cur = displayCurrency;
+      if (e.sourceType == 'bill') {
+        final row = billById[e.sourceId];
+        final acc = row?['accounts'];
+        if (acc is Map) {
+          cur = (acc['currency_code'] ?? displayCurrency).toString();
+        }
+      } else {
+        final row = recById[e.sourceId];
+        final acc = row?['accounts'];
+        if (acc is Map) {
+          cur = (acc['currency_code'] ?? displayCurrency).toString();
+        }
+      }
+      projectedOutflows30d += await _convertToTargetCurrency(
+        amount: abs,
+        sourceCurrencyCode: cur,
+        targetCurrencyCode: displayCurrency,
+      );
+    }
+    final safeToSpend = totalBalance - projectedOutflows30d;
+
+    final categoryThis =
+        await _expenseByCategory(monthTx, displayCurrency);
+    final categoryPrev =
+        await _expenseByCategory(prevMonthTx, displayCurrency);
+    final categoryM2 =
+        await _expenseByCategory(monthTxM2, displayCurrency);
+    final categoryM3 =
+        await _expenseByCategory(monthTxM3, displayCurrency);
+    final spendBaselines = SpendBaselineAnalyzer.categoryRunHigh(
+      currentMonthByCategory: categoryThis,
+      priorMonthTotals: [categoryPrev, categoryM2, categoryM3],
+    );
+    final nudges = FinanceNudgeComputer.compute(
+      now: now,
+      incomeThisMonth: incomeMonth,
+      goals: goals,
+      displayCurrency: displayCurrency,
+    );
+    final weekExpense = await _sumExpenseInDisplay(weekTx, displayCurrency);
+    final prevWeekExpense =
+        await _sumExpenseInDisplay(prevWeekTx, displayCurrency);
+    final weekCat = await _expenseByCategory(weekTx, displayCurrency);
+    final prevWeekCat = await _expenseByCategory(prevWeekTx, displayCurrency);
+    String? weekSpikeCategory;
+    var weekSpikeRatio = 1.0;
+    weekCat.forEach((name, cur) {
+      final prev = prevWeekCat[name] ?? 0;
+      if (prev < 5) return;
+      final r = cur / prev;
+      if (r > weekSpikeRatio) {
+        weekSpikeRatio = r;
+        weekSpikeCategory = name;
+      }
+    });
+
+    final insightFeed = DashboardInsightFeed.build(
+      safeToSpend: safeToSpend,
+      totalBalance: totalBalance,
+      projectedOutflows30d: projectedOutflows30d,
+      weekExpense: weekExpense,
+      prevWeekExpense: prevWeekExpense,
+      nudges: nudges,
+      spendHigh: spendBaselines,
+      weekSpikeCategory:
+          weekSpikeRatio >= 1.25 ? weekSpikeCategory : null,
+      weekSpikeRatio: weekSpikeRatio,
+    );
+
+    var subscriptionHeuristic = 0.0;
+    categoryThis.forEach((name, v) {
+      final low = name.toLowerCase();
+      if (low.contains('subscription') ||
+          low.contains('streaming') ||
+          low.contains('subscr')) {
+        subscriptionHeuristic += v;
+      }
+    });
+    final expensePrevMonthTotal =
+        await _sumExpenseInDisplay(prevMonthTx, displayCurrency);
+    final debtOwedByMe = await _debtOwedByMeInDisplay(
+      displayCurrency,
+    );
+    final healthBreakdown = FinancialHealthScore.computeDetailed(
+      incomeMonth: incomeMonth,
+      expenseMonth: expenseMonth,
+      expensePrevMonth: expensePrevMonthTotal,
+      safeToSpend: safeToSpend,
+      totalBalance: totalBalance,
+      debtOwedByMeRemaining: debtOwedByMe,
+      subscriptionSpendMonth: subscriptionHeuristic,
+      workspaceCapBreached: false,
+    );
+    final personality = MoneyPersonalityResult.compute(
+      incomeMonth: incomeMonth,
+      expenseMonth: expenseMonth,
+      safeToSpend: safeToSpend,
+      debtOwedByMe: debtOwedByMe,
+      weekExpense: weekExpense,
+      prevWeekExpense: prevWeekExpense,
+    );
+
     return _DashboardData(
       accounts: accounts,
       totalBalance: totalBalance,
@@ -133,7 +339,89 @@ class _DashboardScreenState extends State<DashboardScreen> {
       expenseMonth: expenseMonth,
       savingsTotal: savingsTotal,
       savedAccountOrder: savedOrder,
+      safeToSpend: safeToSpend,
+      projectedOutflows30d: projectedOutflows30d,
+      pendingSyncCount: pendingSyncCount,
+      categoryLearningStats: learningStats,
+      insightFeed: insightFeed,
+      financialHealthBreakdown: healthBreakdown,
+      moneyPersonalityLabel: personality.shortLabel,
     );
+  }
+
+  Future<double> _debtOwedByMeInDisplay(String displayCurrency) async {
+    final loans = await widget.repository.fetchLoans();
+    final paymentsF = widget.repository.fetchLoanPayments();
+    if (loans.isEmpty) return 0;
+    final payments = await paymentsF;
+    final paidByLoan = <String, double>{};
+    for (final p in payments) {
+      final lid = p['loan_id']?.toString();
+      if (lid == null) continue;
+      paidByLoan[lid] = (paidByLoan[lid] ?? 0) +
+          ((p['amount'] as num?) ?? 0).toDouble();
+    }
+    var sum = 0.0;
+    for (final loan in loans) {
+      if ((loan['direction'] ?? '').toString() != 'owed_by_me') continue;
+      final id = loan['id']?.toString() ?? '';
+      final total = ((loan['total_amount'] as num?) ?? 0).toDouble();
+      final paid = paidByLoan[id] ?? 0;
+      final rem = (total - paid).clamp(0.0, double.infinity);
+      if (rem <= 0) continue;
+      final cur = (loan['currency_code'] ?? displayCurrency).toString();
+      sum += await _convertToTargetCurrency(
+        amount: rem,
+        sourceCurrencyCode: cur,
+        targetCurrencyCode: displayCurrency,
+      );
+    }
+    return sum;
+  }
+
+  Future<Map<String, double>> _expenseByCategory(
+    List<Map<String, dynamic>> txs,
+    String displayCurrency,
+  ) async {
+    final map = <String, double>{};
+    for (final tx in txs) {
+      if ((tx['kind'] ?? '').toString() != 'expense') continue;
+      final cat = tx['categories'];
+      final name = cat is Map ? (cat['name'] ?? 'Other').toString() : 'Other';
+      final amount = ((tx['amount'] as num?) ?? 0).toDouble();
+      final account = tx['account'];
+      final source = account is Map
+          ? (account['currency_code'] ?? displayCurrency).toString()
+          : displayCurrency;
+      final conv = await _convertToTargetCurrency(
+        amount: amount,
+        sourceCurrencyCode: source,
+        targetCurrencyCode: displayCurrency,
+      );
+      map[name] = (map[name] ?? 0) + conv;
+    }
+    return map;
+  }
+
+  Future<double> _sumExpenseInDisplay(
+    List<Map<String, dynamic>> txs,
+    String displayCurrency,
+  ) async {
+    var total = 0.0;
+    for (final tx in txs) {
+      if ((tx['kind'] ?? '').toString() != 'expense') continue;
+      final amount = ((tx['amount'] as num?) ?? 0).toDouble();
+      final account = tx['account'];
+      final source = account is Map
+          ? (account['currency_code'] ?? displayCurrency).toString()
+          : displayCurrency;
+      total += await _convertToTargetCurrency(
+        amount: amount,
+        sourceCurrencyCode: source,
+        targetCurrencyCode: displayCurrency,
+      );
+    }
+    return total;
   }
 
   Future<double> _convertToTargetCurrency({
@@ -228,7 +516,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Edit Account'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -239,7 +527,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
-                value: type,
+                key: ValueKey('dash-edit-type-$type'),
+                initialValue: type,
                 items: const [
                   DropdownMenuItem(value: 'cash', child: Text('Cash')),
                   DropdownMenuItem(value: 'bank', child: Text('Bank')),
@@ -252,7 +541,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
-                value: supportedCurrencyCodes.contains(currencyCode)
+                key: ValueKey(
+                  'dash-edit-ccy-${supportedCurrencyCodes.contains(currencyCode) ? currencyCode : 'USD'}',
+                ),
+                initialValue: supportedCurrencyCodes.contains(currencyCode)
                     ? currencyCode
                     : 'USD',
                 items: supportedCurrencyCodes
@@ -351,7 +643,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             return null;
           }
 
-          return AlertDialog(
+          return AppAlertDialog(
           title: Text('Quick Add • ${(account['name'] ?? '').toString()}'),
           content: SizedBox(
             width: 420,
@@ -360,7 +652,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   DropdownButtonFormField<String>(
-                    value: kind,
+                    key: ValueKey('dash-quick-kind-$kind'),
+                    initialValue: kind,
                     items: const [
                       DropdownMenuItem(
                           value: 'expense', child: Text('Expense')),
@@ -602,14 +895,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ],
                 );
               }
-              final accounts = snapshot.data?.accounts ?? [];
-              final totalBalance = snapshot.data?.totalBalance ?? 0;
-              final incomeMonth = snapshot.data?.incomeMonth ?? 0;
-              final expenseMonth = snapshot.data?.expenseMonth ?? 0;
-              final savingsTotal = snapshot.data?.savingsTotal ?? 0;
+              final data = snapshot.data!;
+              final accounts = data.accounts;
+              final totalBalance = data.totalBalance;
+              final incomeMonth = data.incomeMonth;
+              final expenseMonth = data.expenseMonth;
+              final savingsTotal = data.savingsTotal;
+              final safeToSpend = data.safeToSpend;
+              final projectedOutflows30d = data.projectedOutflows30d;
+              final pendingSyncCount = data.pendingSyncCount;
+              final learning = data.categoryLearningStats;
+              final insightFeed = data.insightFeed;
+              final financialHealthScore =
+                  data.financialHealthBreakdown.score;
+              final moneyPersonalityLabel = data.moneyPersonalityLabel;
               final netFlow = incomeMonth - expenseMonth;
-              final savedOrder =
-                  snapshot.data?.savedAccountOrder ?? const <String>[];
+              final savedOrder = data.savedAccountOrder;
               final effectiveOrder = _sanitizeOrder(
                 rawOrder: _accountOrder.isNotEmpty ? _accountOrder : savedOrder,
                 accounts: accounts,
@@ -624,12 +925,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     child: Container(
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22),
+                        borderRadius: AppDesignTokens.panelRadius,
                         gradient: const LinearGradient(
                           colors: [Color(0xFF3B4F93), Color(0xFF202A4A)],
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
                         ),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.22),
+                          width: 1,
+                        ),
+                        boxShadow: AppDesignTokens.glassPanelShadows,
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -650,7 +956,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 6),
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.14),
+                              color: Colors.white.withValues(alpha: 0.14),
                               borderRadius: BorderRadius.circular(20),
                             ),
                             child: Text(
@@ -663,6 +969,394 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  AnimatedAppear(
+                    delayMs: 8,
+                    child: GlassPanel(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        child: Wrap(
+                          spacing: 12,
+                          runSpacing: 8,
+                          children: [
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.offline_pin_rounded,
+                                  size: 18,
+                                  color: Colors.white.withValues(alpha: 0.75),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  pendingSyncCount > 0
+                                      ? 'Offline-ready · $pendingSyncCount pending sync'
+                                      : 'Offline-ready',
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(alpha: 0.75),
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (learning.shouldHighlight)
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.auto_fix_high_rounded,
+                                    size: 18,
+                                    color: Color(0xFFB794E8),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Smart categories · ~${learning.displayedAccuracyPercent}%',
+                                    style: TextStyle(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.75),
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  AnimatedAppear(
+                    delayMs: 12,
+                    child: GlassPanel(
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.savings_outlined,
+                                  color: safeToSpend < 0
+                                      ? const Color(0xFFFF9B9B)
+                                      : _workspaceChromeAccent(context),
+                                ),
+                                const SizedBox(width: 8),
+                                const Expanded(
+                                  child: Text(
+                                    'Safe to spend today',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'After bills & subscriptions in the next 30 days (projection).',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.65),
+                                fontSize: 12,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              formatMoney(safeToSpend,
+                                  currencyCode: _currencyCode),
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
+                                color: safeToSpend < 0
+                                    ? const Color(0xFFFF9B9B)
+                                    : null,
+                              ),
+                            ),
+                            if (projectedOutflows30d > 0) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                'Planned outflows: ${formatMoney(projectedOutflows30d, currencyCode: _currencyCode)}',
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.6),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  AnimatedAppear(
+                    delayMs: 11,
+                    child: GlassPanel(
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            showFinancialHealthDetailSheet(
+                              context: context,
+                              breakdown: data.financialHealthBreakdown,
+                              currencyCode: _currencyCode,
+                              moneyPersonalityLabel: moneyPersonalityLabel,
+                            );
+                          },
+                          borderRadius: BorderRadius.circular(16),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 12),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF4ADE80)
+                                        .withValues(alpha: 0.18),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Text(
+                                    '$financialHealthScore',
+                                    style: const TextStyle(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w800,
+                                      color: Color(0xFF4ADE80),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          const Expanded(
+                                            child: Text(
+                                              'Financial health',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                          Icon(
+                                            Icons.info_outline_rounded,
+                                            size: 18,
+                                            color: Colors.white
+                                                .withValues(alpha: 0.45),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        moneyPersonalityLabel,
+                                        style: TextStyle(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.68),
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Tap for a detailed fix list',
+                                        style: TextStyle(
+                                          color: _workspaceChromeAccent(context)
+                                              .withValues(alpha: 0.9),
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Text(
+                                  '/100',
+                                  style: TextStyle(
+                                    color: Colors.white
+                                        .withValues(alpha: 0.45),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  AnimatedAppear(
+                    delayMs: 20,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: GlassPanel(
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) =>
+                                          BusinessWorkspaceThemeScope(
+                                        repository: widget.repository,
+                                        child: FinanceInsightsScreen(
+                                          repository: widget.repository,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                                borderRadius: BorderRadius.circular(16),
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                      12, 12, 8, 12),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.auto_graph_rounded),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Text(
+                                              'Finance insights',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'Cash flow, digest, goals',
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                color: Colors.white
+                                                    .withValues(alpha: 0.65),
+                                                fontSize: 11,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Icon(
+                                        Icons.chevron_right,
+                                        color: Colors.white
+                                            .withValues(alpha: 0.45),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: insightFeed.isEmpty
+                              ? const SizedBox.shrink()
+                              : GlassPanel(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(12),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Icon(
+                                          insightFeed.first.icon,
+                                          size: 22,
+                                          color: insightFeed.first.accentColor(
+                                            Theme.of(context).colorScheme,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                insightFeed.first.title,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                insightFeed.first.subtitle,
+                                                maxLines: 3,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: Colors.white
+                                                      .withValues(alpha: 0.65),
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (insightFeed.length > 1) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'More',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 6),
+                    ...insightFeed.skip(1).map(
+                      (item) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: AnimatedAppear(
+                          delayMs: 16,
+                          child: GlassPanel(
+                            child: ListTile(
+                              dense: true,
+                              leading: Icon(
+                                item.icon,
+                                color: item.accentColor(
+                                  Theme.of(context).colorScheme,
+                                ),
+                              ),
+                              title: Text(
+                                item.title,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              subtitle: Text(
+                                item.subtitle,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.7),
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   AnimatedAppear(
                       delayMs: 70,
@@ -755,7 +1449,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             width: 38,
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(12),
-                              color: const Color(0xFF6D82FF).withOpacity(0.22),
+                              color:
+                                  const Color(0xFF6D82FF).withValues(alpha: 0.22),
                             ),
                             child: const Icon(
                                 Icons.account_balance_wallet_outlined,
@@ -873,7 +1568,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               height: 44,
               width: 44,
               decoration: BoxDecoration(
-                color: color.withOpacity(0.22),
+                color: color.withValues(alpha: 0.22),
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Icon(icon, color: color),
@@ -906,6 +1601,13 @@ class _DashboardData {
     required this.expenseMonth,
     required this.savingsTotal,
     required this.savedAccountOrder,
+    required this.safeToSpend,
+    required this.projectedOutflows30d,
+    required this.pendingSyncCount,
+    required this.categoryLearningStats,
+    required this.insightFeed,
+    required this.financialHealthBreakdown,
+    required this.moneyPersonalityLabel,
   });
 
   final List<Map<String, dynamic>> accounts;
@@ -914,4 +1616,11 @@ class _DashboardData {
   final double expenseMonth;
   final double savingsTotal;
   final List<String> savedAccountOrder;
+  final double safeToSpend;
+  final double projectedOutflows30d;
+  final int pendingSyncCount;
+  final CategoryLearningSurfaceStats categoryLearningStats;
+  final List<DashboardInsightFeedItem> insightFeed;
+  final FinancialHealthBreakdown financialHealthBreakdown;
+  final String moneyPersonalityLabel;
 }

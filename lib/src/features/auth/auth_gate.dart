@@ -9,6 +9,7 @@ import '../../core/config/business_features_config.dart';
 import '../../core/security/app_lock_gate.dart';
 import '../../data/app_repository.dart';
 import '../home/mode_router_screen.dart';
+import '../onboarding/walkthrough_host.dart';
 import 'login_screen.dart';
 import 'password_reset_screen.dart';
 
@@ -101,7 +102,9 @@ class _AuthGateState extends State<AuthGate> {
           );
         }
         return AppLockGate(
-          child: ModeRouterScreen(repository: _repo),
+          child: WalkthroughHost(
+            child: ModeRouterScreen(repository: _repo),
+          ),
         );
       },
     );

@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 
 import '../../core/currency/currency_utils.dart';
 import '../../core/network/network_status_service.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_design_tokens.dart';
 import '../../core/ui/keep_alive_tab_page.dart';
 import '../../core/ui/workspace_ui_theme.dart';
 import '../../data/app_repository.dart';
-import '../categories/categories_screen.dart';
+import 'bills_subscriptions_hub_screen.dart';
+import 'business_savings_loans_screen.dart';
 import '../dashboard/dashboard_screen.dart';
 import '../reports/reports_screen.dart';
 import '../settings/settings_screen.dart';
@@ -26,11 +28,10 @@ class BusinessHomeScreen extends StatefulWidget {
 
 class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
   int _currentIndex = 0;
-  int _dataRevision = 0;
+  final int _dataRevision = 0;
   bool _isOffline = false;
   late final PageController _pageController;
   StreamSubscription<bool>? _networkSubscription;
-  StreamSubscription<int>? _dataChangesSubscription;
   int _tabBodiesCacheKey = -1;
   List<Widget> _cachedTabBodies = const [];
   int? _programmaticPageTarget;
@@ -39,7 +40,8 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
     'Overview',
     'Transactions',
     'Reports',
-    'Categories',
+    'Bills & subscriptions',
+    'Savings & loans',
     'Workspaces',
     'Settings',
   ];
@@ -49,16 +51,6 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
     super.initState();
     _pageController = PageController(initialPage: _currentIndex);
     _initNetworkState();
-    _dataChangesSubscription = widget.repository.dataChanges.listen((_) {
-      if (!mounted) return;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        setState(() {
-          _dataRevision++;
-          _programmaticPageTarget = null;
-        });
-      });
-    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       widget.repository.syncPendingOperations();
       widget.repository.ensureDefaultCategories();
@@ -116,10 +108,10 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
       barrierDismissible: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setInnerState) {
-          return AlertDialog(
+          return AppAlertDialog(
             title: const Text('Choose Default Currency'),
             content: DropdownButtonFormField<String>(
-              value: selected,
+              initialValue: selected,
               decoration: const InputDecoration(labelText: 'Currency'),
               items: supportedCurrencyCodes
                   .map(
@@ -158,7 +150,6 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
   void dispose() {
     _pageController.dispose();
     _networkSubscription?.cancel();
-    _dataChangesSubscription?.cancel();
     super.dispose();
   }
 
@@ -202,6 +193,7 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
     required String label,
   }) {
     final selected = _currentIndex == index;
+    const accent = Color(0xFF3BD188);
     return Expanded(
       child: Material(
         color: Colors.transparent,
@@ -217,27 +209,27 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
                   duration: AppDesignTokens.quick,
                   curve: AppDesignTokens.emphasizedCurve,
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                   decoration: BoxDecoration(
                     color: selected
-                        ? const Color(0xFF3BD188).withValues(alpha: 0.18)
+                        ? accent.withValues(alpha: 0.18)
                         : Colors.transparent,
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
                       color: selected
-                          ? const Color(0xFF3BD188).withValues(alpha: 0.42)
+                          ? accent.withValues(alpha: 0.42)
                           : Colors.transparent,
                     ),
                   ),
                   child: Icon(
                     selected ? iconFilled : iconOutlined,
-                    size: 22,
+                    size: 21,
                     color: selected
-                        ? const Color(0xFF3BD188)
+                        ? accent
                         : Colors.white.withValues(alpha: 0.48),
                   ),
                 ),
-                const SizedBox(height: 5),
+                const SizedBox(height: 4),
                 SizedBox(
                   width: double.infinity,
                   child: FittedBox(
@@ -247,7 +239,7 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
                       maxLines: 1,
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: 10,
+                        fontSize: 9,
                         fontWeight:
                             selected ? FontWeight.w700 : FontWeight.w500,
                         height: 1.05,
@@ -280,10 +272,14 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
         key: ValueKey('business-reports-$_dataRevision'),
         repository: widget.repository,
       ),
-      CategoriesScreen(
-        key: ValueKey('business-categories-$_dataRevision'),
+      BillsSubscriptionsHubScreen(
+        key: ValueKey('business-bills-subs-$_dataRevision'),
         repository: widget.repository,
-        showAppBar: false,
+        businessChrome: true,
+      ),
+      BusinessSavingsLoansScreen(
+        key: ValueKey('business-savings-loans-$_dataRevision'),
+        repository: widget.repository,
       ),
       WorkspacesScreen(
         key: ValueKey('business-workspaces-$_dataRevision'),
@@ -335,7 +331,7 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
             onPressed: () async {
               final confirm = await showDialog<bool>(
                 context: context,
-                builder: (ctx) => AlertDialog(
+                builder: (ctx) => AppAlertDialog(
                   title: const Text('Log out?'),
                   content: const Text(
                     'You will need to sign in again to use the app.',
@@ -444,18 +440,24 @@ class _BusinessHomeScreenState extends State<BusinessHomeScreen> {
               ),
               _buildNavItem(
                 index: 3,
-                iconOutlined: Icons.category_outlined,
-                iconFilled: Icons.category,
-                label: 'Categories',
+                iconOutlined: Icons.receipt_long_outlined,
+                iconFilled: Icons.receipt_long,
+                label: 'Bills',
               ),
               _buildNavItem(
                 index: 4,
+                iconOutlined: Icons.account_balance_wallet_outlined,
+                iconFilled: Icons.account_balance_wallet,
+                label: 'Save/Loan',
+              ),
+              _buildNavItem(
+                index: 5,
                 iconOutlined: Icons.apartment_outlined,
                 iconFilled: Icons.apartment,
                 label: 'Workspaces',
               ),
               _buildNavItem(
-                index: 5,
+                index: 6,
                 iconOutlined: Icons.settings_outlined,
                 iconFilled: Icons.settings,
                 label: 'Settings',

@@ -13,7 +13,10 @@ import '../core/currency/exchange_rate_service.dart';
 import '../core/ledger/transaction_ledger_service.dart';
 
 class AppRepository {
-  AppRepository(this._client) : _ledger = TransactionLedgerService(_client);
+  AppRepository(this._client) : _ledger = TransactionLedgerService(_client) {
+    BusinessEntitlementService.instance
+        .addListener(_onBusinessEntitlementServiceChanged);
+  }
 
   final SupabaseClient _client;
   final TransactionLedgerService _ledger;
@@ -105,14 +108,74 @@ class AppRepository {
     'Other',
   ];
 
+  bool _handlingBusinessProLapse = false;
   bool _isSyncing = false;
   DateTime? _lastSyncAttempt;
   final StreamController<int> _dataChangeController =
       StreamController<int>.broadcast();
+  final StreamController<int> _businessProLapsedController =
+      StreamController<int>.broadcast();
   int _dataRevision = 0;
+  int _businessProLapseRevision = 0;
+  bool? _lastTrackedEntitlementActive;
   _WorkspaceScope _lastKnownWorkspace = const _WorkspaceScope.personal();
 
   Stream<int> get dataChanges => _dataChangeController.stream;
+
+  /// Fires when Business Pro goes from entitled to not entitled (RevenueCat),
+  /// while the user is still signed in. UI may show a one-shot notice and rely
+  /// on [dataChanges] for shell refresh.
+  Stream<int> get businessProLapsed => _businessProLapsedController.stream;
+
+  void _onBusinessEntitlementServiceChanged() {
+    final user = currentUser;
+    final service = BusinessEntitlementService.instance;
+    final now = service.hasActiveEntitlement;
+
+    if (user == null) {
+      _lastTrackedEntitlementActive = null;
+      return;
+    }
+
+    if (_lastTrackedEntitlementActive == null) {
+      _lastTrackedEntitlementActive = now;
+      return;
+    }
+
+    if (_lastTrackedEntitlementActive! && !now) {
+      _lastTrackedEntitlementActive = false;
+      final stillRcSession = service.customerInfo != null;
+      if (stillRcSession) {
+        unawaited(_handleBusinessProSubscriptionLapsed());
+      }
+    } else {
+      _lastTrackedEntitlementActive = now;
+    }
+  }
+
+  Future<void> _handleBusinessProSubscriptionLapsed() async {
+    if (_handlingBusinessProLapse) return;
+    if (currentUser == null) return;
+    if (!BusinessFeaturesConfig.isEnabled) return;
+
+    _handlingBusinessProLapse = true;
+    try {
+      try {
+        await setActiveWorkspace(kind: 'personal');
+        await refreshBusinessEntitlement();
+      } catch (_) {
+        _notifyDataChanged();
+        return;
+      }
+
+      _businessProLapseRevision++;
+      if (!_businessProLapsedController.isClosed) {
+        _businessProLapsedController.add(_businessProLapseRevision);
+      }
+    } finally {
+      _handlingBusinessProLapse = false;
+    }
+  }
 
   User? get currentUser => _client.auth.currentUser;
 
@@ -988,6 +1051,8 @@ class AppRepository {
                 organizationId: _normalizedOrganizationId(
                   resolved['organization_id'],
                 ),
+                accountAmount:
+                    (resolved['account_amount'] as num?)?.toDouble(),
               );
               cacheChanged = true;
               break;
@@ -1100,6 +1165,9 @@ class AppRepository {
                 organizationId: _normalizedOrganizationId(
                   resolvedLoan['organization_id'],
                 ),
+                accountTransactionAmount: (resolvedLoan['account_transaction_amount']
+                        as num?)
+                    ?.toDouble(),
               );
               cacheChanged = true;
               break;
@@ -1371,9 +1439,16 @@ class AppRepository {
     }
     final profile = await fetchProfile();
     final service = BusinessEntitlementService.instance;
+    final rcEntitled = service.hasActiveEntitlement;
+    final profileEntitled =
+        BusinessAccessState.profileIndicatesEntitledSubscription(profile);
+    final entitledForUi = rcEntitled ||
+        (BusinessFeaturesConfig.isEnabled &&
+            service.isDesktopWithoutStoreSdk &&
+            profileEntitled);
     final base = BusinessAccessState.fromSources(
       profile: profile,
-      entitlementActive: service.hasActiveEntitlement,
+      entitlementActive: entitledForUi,
       billingAvailable: service.isAvailable,
       managementUrl: service.managementUrl,
       errorMessage: service.lastError,
@@ -1412,9 +1487,16 @@ class AppRepository {
     await service.syncUser(user);
     await service.refresh(invalidateCache: true);
 
+    if (service.isDesktopWithoutStoreSdk) {
+      // Do not patch business_pro_* from RevenueCat — SDK has no store data here;
+      // status comes from the last mobile sync in profile.
+      _notifyDataChanged();
+      return;
+    }
+
     final entitlement = service.entitlement;
     var status = 'inactive';
-    if (!service.isAvailable) {
+    if (!service.canPresentNativePaywall && !service.hasActiveEntitlement) {
       status = 'unavailable';
     } else if (service.hasActiveEntitlement) {
       if (entitlement?.billingIssueDetectedAt != null) {
@@ -2348,7 +2430,7 @@ class AppRepository {
             '*, '
             'account:accounts!transactions_account_id_fkey(name, currency_code), '
             'transfer_account:accounts!transactions_transfer_account_id_fkey(name, currency_code), '
-            'categories(name, icon, color_hex)',
+            'categories(id, name, icon, color_hex)',
           )
           .eq('user_id', user.id);
       query = _applyWorkspaceFilter(query, scope.organizationId);
@@ -2395,7 +2477,7 @@ class AppRepository {
             '*, '
             'account:accounts!transactions_account_id_fkey(name, currency_code), '
             'transfer_account:accounts!transactions_transfer_account_id_fkey(name, currency_code), '
-            'categories(name, icon, color_hex)',
+            'categories(id, name, icon, color_hex)',
           )
           .eq('user_id', user.id)
           .gte('transaction_date', startDate)
@@ -2444,6 +2526,70 @@ class AppRepository {
       }
       rethrow;
     }
+  }
+
+  /// Inclusive [startLocal] and [endLocal] calendar days (local timezone).
+  Future<List<Map<String, dynamic>>> fetchTransactionsBetween({
+    required DateTime startLocal,
+    required DateTime endLocal,
+  }) async {
+    final user = currentUser;
+    if (user == null) return [];
+    await _prepareForRead();
+    final scope = await _activeWorkspaceScope();
+    final start =
+        DateTime(startLocal.year, startLocal.month, startLocal.day);
+    final end = DateTime(endLocal.year, endLocal.month, endLocal.day);
+    final startUtc = DateTime.utc(start.year, start.month, start.day);
+    final endExclusive = DateTime.utc(end.year, end.month, end.day)
+        .add(const Duration(days: 1));
+    final startDate = startUtc.toIso8601String();
+    final endDate = endExclusive.toIso8601String();
+    dynamic query = _client
+        .from('transactions')
+        .select(
+          '*, '
+          'account:accounts!transactions_account_id_fkey(name, currency_code), '
+          'transfer_account:accounts!transactions_transfer_account_id_fkey(name, currency_code), '
+          'categories(id, name, icon, color_hex)',
+        )
+        .eq('user_id', user.id)
+        .gte('transaction_date', startDate)
+        .lt('transaction_date', endDate);
+    query = _applyWorkspaceFilter(query, scope.organizationId);
+    final data =
+        await query.order('transaction_date', ascending: false).limit(5000);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  Future<String> fetchActiveWorkspaceRole() async {
+    final workspaces = await fetchWorkspaces();
+    for (final row in workspaces) {
+      if ((row['is_active'] as bool?) == true) {
+        return (row['role'] ?? 'owner').toString();
+      }
+    }
+    return 'owner';
+  }
+
+  Future<bool> isActiveWorkspaceReadOnly() async {
+    final role = (await fetchActiveWorkspaceRole()).toLowerCase().trim();
+    return role == 'viewer';
+  }
+
+  /// Non-null only when the active workspace is an organization.
+  Future<String?> fetchActiveOrganizationId() async {
+    final workspaces = await fetchWorkspaces();
+    for (final row in workspaces) {
+      if ((row['is_active'] as bool?) != true) continue;
+      if ((row['kind'] ?? '').toString().toLowerCase() != 'organization') {
+        return null;
+      }
+      final id = row['organization_id']?.toString();
+      if (id == null || id.isEmpty) return null;
+      return id;
+    }
+    return null;
   }
 
   Future<void> createTransaction({
@@ -2929,6 +3075,9 @@ class AppRepository {
     required double amount,
     required String accountId,
     String? note,
+    /// When set, this amount (account currency) is debited; [amount] is always
+    /// added to the goal in the goal's currency. Omit when both match.
+    double? accountAmount,
   }) async {
     final scope = await _activeWorkspaceScope();
     final goalsKey = _savingsGoalsKey(scope: scope);
@@ -2950,6 +3099,7 @@ class AppRepository {
       throw Exception(
           'Amount exceeds remaining goal amount (${remaining.toStringAsFixed(2)}).');
     }
+    final accountDebit = accountAmount ?? amount;
     try {
       await _addSavingsProgressRemote(
         goalId: goalId,
@@ -2957,6 +3107,7 @@ class AppRepository {
         accountId: accountId,
         note: note,
         organizationId: scope.organizationId,
+        accountAmount: accountAmount,
       );
       await _removeCachedKey(goalsKey);
       await _removeCachedKey(contributionsKey);
@@ -2964,7 +3115,7 @@ class AppRepository {
     } catch (error) {
       if (!_isNetworkError(error)) rethrow;
       final cachedBalance = await _cachedAccountBalance(accountId);
-      if (cachedBalance != null && cachedBalance < amount) {
+      if (cachedBalance != null && cachedBalance < accountDebit) {
         throw Exception('Insufficient balance in selected account.');
       }
       await _enqueueOperation(
@@ -2974,6 +3125,7 @@ class AppRepository {
           'amount': amount,
           'account_id': accountId,
           'note': note,
+          if (accountAmount != null) 'account_amount': accountAmount,
         }, scope: scope),
       );
       final goals = await _readCachedList(goalsKey);
@@ -2983,7 +3135,7 @@ class AppRepository {
           row['current_amount'] = current + amount;
         }
       }
-      await _applyAccountBalanceDeltasInCache({accountId: -amount});
+      await _applyAccountBalanceDeltasInCache({accountId: -accountDebit});
       await _writeCachedList(goalsKey, goals);
       final contributions = await _readCachedList(contributionsKey);
       final contributionId = _newLocalId('contribution');
@@ -3012,7 +3164,7 @@ class AppRepository {
         'account_id': accountId,
         'category_id': null,
         'kind': 'expense',
-        'amount': amount,
+        'amount': accountDebit,
         'source_type': 'savings_contribution',
         'source_ref_id': contributionId,
         'note': note ?? 'Savings contribution: $goalName',
@@ -3037,19 +3189,24 @@ class AppRepository {
     required String accountId,
     String? note,
     String? organizationId,
+    double? accountAmount,
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final params = <String, dynamic>{
+      'p_user_id': user.id,
+      'p_organization_id': organizationId,
+      'p_goal_id': goalId,
+      'p_amount': amount,
+      'p_account_id': accountId,
+      'p_note': note,
+    };
+    if (accountAmount != null) {
+      params['p_account_amount'] = accountAmount;
+    }
     await _client.rpc(
       'add_savings_progress',
-      params: {
-        'p_user_id': user.id,
-        'p_organization_id': organizationId,
-        'p_goal_id': goalId,
-        'p_amount': amount,
-        'p_account_id': accountId,
-        'p_note': note,
-      },
+      params: params,
     );
   }
 
@@ -3269,7 +3426,7 @@ class AppRepository {
     final scope = await _activeWorkspaceScope();
     dynamic query = _client
         .from('recurring_transactions')
-        .select('*, accounts(name), categories(name)')
+        .select('*, accounts(name, currency_code), categories(name)')
         .eq('user_id', user.id);
     query = _applyWorkspaceFilter(query, scope.organizationId);
     final data = await query.order('next_run_date');
@@ -3337,7 +3494,7 @@ class AppRepository {
     final scope = await _activeWorkspaceScope();
     dynamic query = _client
         .from('bill_reminders')
-        .select('*, accounts(name), categories(name)')
+        .select('*, accounts(name, currency_code), categories(name)')
         .eq('user_id', user.id);
     query = _applyWorkspaceFilter(query, scope.organizationId);
     final data = await query.order('due_date');
@@ -3729,6 +3886,9 @@ class AppRepository {
     required String accountId,
     required DateTime paymentDate,
     String? note,
+    /// Book amount on [accountId] (account currency). [amount] is stored on the
+    /// loan payment in loan currency. Omit when currencies match.
+    double? accountTransactionAmount,
   }) async {
     final user = currentUser;
     if (user == null) return;
@@ -3750,23 +3910,44 @@ class AppRepository {
             ? 'Loan payment received from $personName'
             : 'Loan payment sent to $personName';
     final paid = await _totalPaidForLoan(loanId);
-    final totalAmount = ((loan['total_amount'] as num?) ?? 0).toDouble();
-    final remaining = (totalAmount - paid).clamp(0, double.infinity);
+    final totalAmount =
+        _roundMoney2(((loan['total_amount'] as num?) ?? 0).toDouble());
+    final remaining = _roundMoney2(
+      (totalAmount - paid).clamp(0, double.infinity),
+    );
     if (remaining <= 0) {
       throw Exception('This loan is already fully paid.');
     }
-    if (amount > remaining) {
-      throw Exception(
-          'Amount exceeds remaining loan amount (${remaining.toStringAsFixed(2)}).');
+    var payAmount = _roundMoney2(amount);
+    final payCents = (payAmount * 100).round();
+    final remCents = (remaining * 100).round();
+    if (payCents > remCents) {
+      if (payCents - remCents <= 1) {
+        payAmount = remaining;
+      } else {
+        throw Exception(
+          'Amount exceeds remaining loan amount (${remaining.toStringAsFixed(2)}).',
+        );
+      }
     }
+    double? accTx = accountTransactionAmount;
+    if (accTx != null) {
+      accTx = _roundMoney2(accTx);
+      final original = _roundMoney2(amount);
+      if (original > 0 && payAmount != original) {
+        accTx = _roundMoney2(accTx * (payAmount / original));
+      }
+    }
+    final txOnAccount = accTx ?? payAmount;
     try {
       await _addLoanPaymentRemote(
         loanId: loanId,
-        amount: amount,
+        amount: payAmount,
         accountId: accountId,
         paymentDate: paymentDate,
         note: note,
         organizationId: scope.organizationId,
+        accountTransactionAmount: accTx,
       );
       await _removeCachedKey(loanPaymentsKey);
       await _removeCachedKey(accountsKey);
@@ -3776,7 +3957,7 @@ class AppRepository {
       if (!_isNetworkError(error)) rethrow;
       if (transactionKind == 'expense') {
         final cachedBalance = await _cachedAccountBalance(accountId);
-        if (cachedBalance != null && cachedBalance < amount) {
+        if (cachedBalance != null && cachedBalance < txOnAccount) {
           throw Exception('Insufficient balance in selected account.');
         }
       }
@@ -3784,10 +3965,11 @@ class AppRepository {
         _opAddLoanPayment,
         await _payloadWithWorkspaceScope({
           'loan_id': loanId,
-          'amount': amount,
+          'amount': payAmount,
           'account_id': accountId,
           'payment_date': paymentDate.toIso8601String(),
           'note': note,
+          if (accTx != null) 'account_transaction_amount': accTx,
         }, scope: scope),
       );
       final payments = await _readCachedList(loanPaymentsKey);
@@ -3798,7 +3980,7 @@ class AppRepository {
         'organization_id': scope.organizationId,
         'loan_id': loanId,
         'account_id': accountId,
-        'amount': amount,
+        'amount': payAmount,
         'payment_date': paymentDate.toIso8601String(),
         'note': note,
         'created_at': DateTime.now().toIso8601String(),
@@ -3809,8 +3991,9 @@ class AppRepository {
       for (final account in accounts) {
         if (account['id']?.toString() != accountId) continue;
         final current = ((account['current_balance'] as num?) ?? 0).toDouble();
-        account['current_balance'] =
-            transactionKind == 'income' ? current + amount : current - amount;
+        account['current_balance'] = transactionKind == 'income'
+            ? current + txOnAccount
+            : current - txOnAccount;
       }
       await _writeCachedList(accountsKey, accounts);
 
@@ -3822,7 +4005,7 @@ class AppRepository {
         'account_id': accountId,
         'category_id': null,
         'kind': transactionKind,
-        'amount': amount,
+        'amount': txOnAccount,
         'source_type': 'loan_payment',
         'source_ref_id': paymentLocalId,
         'note': transactionNote,
@@ -3834,6 +4017,39 @@ class AppRepository {
       await _clearTransactionsMonthCaches();
     }
     _notifyDataChanged();
+  }
+
+  /// Undo one recorded payment: restores the loan's paid total and reverses
+  /// the linked account transaction (same account as when the payment was recorded).
+  Future<void> reverseLoanPayment({required String loanPaymentId}) async {
+    final user = currentUser;
+    if (user == null) return;
+    final scope = await _activeWorkspaceScope();
+    await _reverseLoanPaymentRemote(
+      loanPaymentId: loanPaymentId,
+      organizationId: scope.organizationId,
+    );
+    await _removeCachedKey(_loanPaymentsKey(scope: scope));
+    await _removeCachedKey(_accountsKey(scope: scope));
+    await _removeCachedKey(_transactionsKey(scope: scope));
+    await _clearTransactionsMonthCaches();
+    _notifyDataChanged();
+  }
+
+  Future<void> _reverseLoanPaymentRemote({
+    required String loanPaymentId,
+    String? organizationId,
+  }) async {
+    final user = currentUser;
+    if (user == null) return;
+    await _client.rpc(
+      'reverse_loan_payment',
+      params: {
+        'p_user_id': user.id,
+        'p_loan_payment_id': loanPaymentId,
+        'p_organization_id': organizationId,
+      },
+    );
   }
 
   Future<void> updateLoan({
@@ -3957,14 +4173,18 @@ class AppRepository {
     _notifyDataChanged();
   }
 
+  /// Matches DB numeric(14,2) / UI money rounding so totals agree with Postgres.
+  double _roundMoney2(double v) => (v * 100).round() / 100;
+
   Future<double> _totalPaidForLoan(String loanId) async {
     final payments = await fetchLoanPayments();
     var paid = 0.0;
     for (final row in payments) {
       if (row['loan_id']?.toString() != loanId) continue;
-      paid += ((row['amount'] as num?) ?? 0).toDouble();
+      final raw = ((row['amount'] as num?) ?? 0).toDouble();
+      paid += _roundMoney2(raw);
     }
-    return paid;
+    return _roundMoney2(paid);
   }
 
   Future<String> _createLoanRemote({
@@ -4003,29 +4223,28 @@ class AppRepository {
     required DateTime paymentDate,
     String? note,
     String? organizationId,
+    double? accountTransactionAmount,
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final params = <String, dynamic>{
+      'p_user_id': user.id,
+      'p_organization_id': organizationId,
+      'p_loan_id': loanId,
+      'p_account_id': accountId,
+      'p_amount': amount,
+      // Local wall clock from the picker must be converted to the same instant
+      // as the rest of the app (`createTransaction`), not by re-interpreting
+      // y/m/d/h/m as UTC (which shifts the displayed time by the timezone).
+      'p_payment_date': paymentDate.toUtc().toIso8601String(),
+      'p_note': note?.trim().isEmpty == true ? null : note?.trim(),
+    };
+    if (accountTransactionAmount != null) {
+      params['p_account_amount'] = accountTransactionAmount;
+    }
     await _client.rpc(
       'record_loan_payment',
-      params: {
-        'p_user_id': user.id,
-        'p_organization_id': organizationId,
-        'p_loan_id': loanId,
-        'p_account_id': accountId,
-        'p_amount': amount,
-        'p_payment_date': DateTime.utc(
-          paymentDate.year,
-          paymentDate.month,
-          paymentDate.day,
-          paymentDate.hour,
-          paymentDate.minute,
-          paymentDate.second,
-          paymentDate.millisecond,
-          paymentDate.microsecond,
-        ).toIso8601String(),
-        'p_note': note?.trim().isEmpty == true ? null : note?.trim(),
-      },
+      params: params,
     );
   }
 

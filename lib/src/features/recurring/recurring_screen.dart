@@ -5,20 +5,31 @@ import '../../core/categories/category_icon_utils.dart';
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/friendly_error.dart';
 import '../../core/notifications/notification_service.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
 
 class RecurringScreen extends StatefulWidget {
-  const RecurringScreen({super.key, required this.repository});
+  const RecurringScreen({
+    super.key,
+    required this.repository,
+    this.embedInHub = false,
+  });
 
   final AppRepository repository;
 
+  /// Hides app bar + FAB when hosted inside [BillsSubscriptionsHubScreen].
+  final bool embedInHub;
+
   @override
-  State<RecurringScreen> createState() => _RecurringScreenState();
+  State<RecurringScreen> createState() => RecurringScreenState();
 }
 
-class _RecurringScreenState extends State<RecurringScreen> {
+class RecurringScreenState extends State<RecurringScreen> {
+  void openCreateSubscription() => _createRecurring();
+  void runDueSubscriptions() => _runDueNow();
+
   late Future<List<Map<String, dynamic>>> _future;
 
   @override
@@ -52,7 +63,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
       await _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Due recurring transactions processed.')),
+        const SnackBar(content: Text('Due subscriptions processed.')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -81,20 +92,21 @@ class _RecurringScreenState extends State<RecurringScreen> {
     final note = TextEditingController();
     List<Map<String, dynamic>> categories =
         await widget.repository.fetchCategories(kind);
+    if (!mounted) return;
     if (categories.isNotEmpty) categoryId = categories.first['id'].toString();
 
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
         builder: (context, setInnerState) {
-          return AlertDialog(
-            title: const Text('Create Recurring Transaction'),
+          return AppAlertDialog(
+            title: const Text('New subscription'),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   DropdownButtonFormField<String>(
-                    value: kind,
+                    initialValue: kind,
                     items: const [
                       DropdownMenuItem(
                           value: 'expense', child: Text('Expense')),
@@ -115,7 +127,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
                   ),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
-                    value: accountId,
+                    initialValue: accountId,
                     items: accounts
                         .map((e) => DropdownMenuItem<String>(
                               value: e['id'].toString(),
@@ -128,7 +140,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
                   ),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
-                    value:
+                    initialValue:
                         categories.any((e) => e['id'].toString() == categoryId)
                             ? categoryId
                             : null,
@@ -163,7 +175,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
                   ),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
-                    value: frequency,
+                    initialValue: frequency,
                     items: const [
                       DropdownMenuItem(value: 'daily', child: Text('Daily')),
                       DropdownMenuItem(value: 'weekly', child: Text('Weekly')),
@@ -240,46 +252,36 @@ class _RecurringScreenState extends State<RecurringScreen> {
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(symbol: '\$');
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Recurring Automations'),
-        actions: [
-          IconButton(
-            tooltip: 'Run due now',
-            onPressed: _runDueNow,
-            icon: const Icon(Icons.play_circle_outline_rounded),
-          ),
-        ],
-      ),
-      body: AppPageScaffold(
-        child: RefreshIndicator(
-          onRefresh: _reload,
-          child: FutureBuilder<List<Map<String, dynamic>>>(
-            future: _future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (snapshot.hasError) {
-                return ListView(
-                  children: [
-                    const SizedBox(height: 120),
-                    Center(child: Text(friendlyErrorMessage(snapshot.error))),
-                  ],
-                );
-              }
-              final items = snapshot.data ?? [];
-              if (items.isEmpty) {
-                return ListView(
-                  children: const [
-                    SizedBox(height: 120),
-                    Center(child: Text('No recurring automations yet')),
-                  ],
-                );
-              }
+    final bottomPad = widget.embedInHub ? 88.0 : 108.0;
+    final body = AppPageScaffold(
+      child: RefreshIndicator(
+        onRefresh: _reload,
+        child: FutureBuilder<List<Map<String, dynamic>>>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return ListView(
+                children: [
+                  const SizedBox(height: 120),
+                  Center(child: Text(friendlyErrorMessage(snapshot.error))),
+                ],
+              );
+            }
+            final items = snapshot.data ?? [];
+            if (items.isEmpty) {
+              return ListView(
+                children: const [
+                  SizedBox(height: 120),
+                  Center(child: Text('No subscriptions yet')),
+                ],
+              );
+            }
 
-              return ListView.builder(
-                padding: const EdgeInsets.only(bottom: 108),
+            return ListView.builder(
+              padding: EdgeInsets.only(bottom: bottomPad),
                 itemCount: items.length,
                 itemBuilder: (context, index) {
                   final item = items[index];
@@ -315,14 +317,30 @@ class _RecurringScreenState extends State<RecurringScreen> {
                   );
                 },
               );
-            },
-          ),
+          },
         ),
       ),
+    );
+
+    if (widget.embedInHub) {
+      return body;
+    }
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Subscriptions'),
+        actions: [
+          IconButton(
+            tooltip: 'Run due subscriptions now',
+            onPressed: _runDueNow,
+            icon: const Icon(Icons.play_circle_outline_rounded),
+          ),
+        ],
+      ),
+      body: body,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createRecurring,
         icon: const Icon(Icons.add),
-        label: const Text('Add'),
+        label: const Text('Add subscription'),
       ),
     );
   }

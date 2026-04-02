@@ -23,11 +23,25 @@ class FlutterWindow : public Win32Window {
                          LPARAM const lparam) noexcept override;
 
  private:
+  enum class FrameMode {
+    kBorderless,  // Covers full monitor (incl. taskbar area), no chrome
+    kMaximized,   // Overlapped window, maximized to work area, has title bar
+    kNormal,      // Centered 1280x720-style window
+  };
+
+  void ApplyBorderlessFullscreen();
+  void ApplyMaximizedWindowed();
+  void ApplyNormalWindowed();
+  void OnF11();
+  void OnEscape();
+
   // The project to run.
   flutter::DartProject project_;
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  FrameMode frame_mode_ = FrameMode::kBorderless;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

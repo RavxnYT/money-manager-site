@@ -10,6 +10,10 @@ build/
 # OS/editor
 *.iml
 
+# Local run logs (may contain API error text)
+flutter_gemini_run.log
+gemini_insights_client_extract.log
+
 # Secrets
 .env
 android/key.properties

@@ -31,13 +31,51 @@ class _AnimatedAppearState extends State<AnimatedAppear>
     end: Offset.zero,
   ).animate(_fade);
 
+  bool _scheduled = false;
+  bool _lastTickerActive = false;
+
+  void _kickForward() {
+    if (!mounted) return;
+    if (_controller.isCompleted) return;
+    _controller.forward();
+  }
+
+  void _scheduleKick() {
+    if (_scheduled) return;
+    _scheduled = true;
+
+    void afterDelay() {
+      if (!mounted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _kickForward();
+      });
+    }
+
+    if (widget.delayMs <= 0) {
+      afterDelay();
+    } else {
+      Future<void>.delayed(Duration(milliseconds: widget.delayMs), afterDelay);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    Future<void>.delayed(Duration(milliseconds: widget.delayMs), () {
-      if (!mounted) return;
-      _controller.forward();
-    });
+    _scheduleKick();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final tickerActive = TickerMode.valuesOf(context).enabled;
+    if (tickerActive &&
+        !_lastTickerActive &&
+        !_controller.isCompleted &&
+        _controller.value < 1.0) {
+      _kickForward();
+    }
+    _lastTickerActive = tickerActive;
   }
 
   @override
@@ -48,6 +86,10 @@ class _AnimatedAppearState extends State<AnimatedAppear>
 
   @override
   Widget build(BuildContext context) {
+    if (MediaQuery.of(context).disableAnimations) {
+      return widget.child;
+    }
+
     return FadeTransition(
       opacity: _fade,
       child: SlideTransition(position: _slide, child: widget.child),

@@ -6,15 +6,16 @@ import '../../core/billing/business_access.dart';
 import '../../core/currency/currency_utils.dart';
 import '../../core/config/business_features_config.dart';
 import '../../core/network/network_status_service.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_design_tokens.dart';
 import '../../core/ui/keep_alive_tab_page.dart';
 import '../../data/app_repository.dart';
 import '../dashboard/dashboard_screen.dart';
-import '../loans/loans_screen.dart';
+import 'bills_subscriptions_hub_screen.dart';
 import '../reports/reports_screen.dart';
 import '../settings/settings_screen.dart';
 import '../settings/workspaces_screen.dart';
-import '../savings/savings_screen.dart';
+import 'savings_loans_hub_screen.dart';
 import '../transactions/transactions_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -43,8 +44,8 @@ class _HomeScreenState extends State<HomeScreen> {
     'Overview',
     'Transactions',
     'Reports',
-    'Savings',
-    'Loans',
+    'Bills & subscriptions',
+    'Savings & loans',
     'Settings',
   ];
 
@@ -52,8 +53,8 @@ class _HomeScreenState extends State<HomeScreen> {
     'Overview',
     'Transactions',
     'Reports',
-    'Savings',
-    'Loans',
+    'Bills & subscriptions',
+    'Savings & loans',
     'Workspaces',
     'Settings',
   ];
@@ -135,10 +136,11 @@ class _HomeScreenState extends State<HomeScreen> {
       barrierDismissible: false,
       builder: (_) => StatefulBuilder(
         builder: (context, setInnerState) {
-          return AlertDialog(
+          return AppAlertDialog(
             title: const Text('Choose Default Currency'),
             content: DropdownButtonFormField<String>(
-              value: selected,
+              key: ValueKey('default-curr-$selected'),
+              initialValue: selected,
               decoration: const InputDecoration(labelText: 'Currency'),
               items: supportedCurrencyCodes
                   .map((code) => DropdownMenuItem<String>(
@@ -184,10 +186,16 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     final hadWorkspace = _businessAccess.entitlementActive;
     final hasWorkspace = access.entitlementActive;
+    final workspaceStructureChanged = hadWorkspace != hasWorkspace;
     setState(() {
-      _dataRevision++;
+      // Only rebuild tab bodies when the Workspaces tab is added or removed.
+      // Bumping revision on every repository data change disposed the dashboard
+      // during startup sync and left FutureBuilder stuck in loading.
+      if (workspaceStructureChanged) {
+        _dataRevision++;
+      }
       _businessAccess = access;
-      if (hadWorkspace != hasWorkspace) {
+      if (workspaceStructureChanged) {
         if (hasWorkspace && !hadWorkspace) {
           if (_currentIndex >= 5) _currentIndex++;
         } else if (!hasWorkspace && hadWorkspace) {
@@ -330,13 +338,15 @@ class _HomeScreenState extends State<HomeScreen> {
         key: ValueKey('reports-$_dataRevision'),
         repository: widget.repository,
       ),
-      SavingsScreen(
-        key: ValueKey('savings-$_dataRevision'),
+      BillsSubscriptionsHubScreen(
+        key: ValueKey('bills-subs-$_dataRevision'),
         repository: widget.repository,
+        businessChrome: false,
       ),
-      LoansScreen(
-        key: ValueKey('loans-$_dataRevision'),
+      SavingsLoansHubScreen(
+        key: ValueKey('personal-savings-loans-$_dataRevision'),
         repository: widget.repository,
+        businessChrome: false,
       ),
       if (_showWorkspaceTab)
         WorkspacesScreen(
@@ -377,11 +387,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xFF25345E), Color(0xFF0D1527)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+            color: AppDesignTokens.backgroundTop,
           ),
         ),
         actions: [
@@ -390,7 +396,7 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () async {
               final confirm = await showDialog<bool>(
                 context: context,
-                builder: (ctx) => AlertDialog(
+                builder: (ctx) => AppAlertDialog(
                   title: const Text('Log out?'),
                   content: const Text(
                     'You will need to sign in again to use the app.',
@@ -470,11 +476,7 @@ class _HomeScreenState extends State<HomeScreen> {
       bottomNavigationBar: Container(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 14),
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: const [Color(0xFF0E1529), Color(0xFF111A2D)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
+          color: AppDesignTokens.backgroundTop,
           border: Border(
             top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
           ),
@@ -503,15 +505,15 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               _buildNavItem(
                 index: 3,
-                iconOutlined: Icons.savings_outlined,
-                iconFilled: Icons.savings,
-                label: 'Savings',
+                iconOutlined: Icons.receipt_long_outlined,
+                iconFilled: Icons.receipt_long,
+                label: 'Bills',
               ),
               _buildNavItem(
                 index: 4,
-                iconOutlined: Icons.people_outline,
-                iconFilled: Icons.people,
-                label: 'Loans',
+                iconOutlined: Icons.account_balance_wallet_outlined,
+                iconFilled: Icons.account_balance_wallet,
+                label: 'Save/Loan',
               ),
               if (_showWorkspaceTab)
                 _buildNavItem(

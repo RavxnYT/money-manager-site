@@ -39,6 +39,11 @@ class MoneyManagementApp extends StatelessWidget {
         colorScheme: scheme,
         useMaterial3: true,
         scaffoldBackgroundColor: AppDesignTokens.backgroundTop,
+        dialogTheme: const DialogThemeData(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          shadowColor: Colors.transparent,
+        ),
         pageTransitionsTheme: const PageTransitionsTheme(
           builders: {
             TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
@@ -49,12 +54,16 @@ class MoneyManagementApp extends StatelessWidget {
           },
         ),
         cardTheme: CardThemeData(
-          color: AppDesignTokens.surface,
+          color: AppDesignTokens.surfaceCardTranslucent,
           elevation: 0,
+          surfaceTintColor: Colors.transparent,
           margin: const EdgeInsets.symmetric(vertical: 7),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-            side: const BorderSide(color: AppDesignTokens.stroke),
+            borderRadius: AppDesignTokens.panelRadius,
+            side: BorderSide(
+              color: Colors.white.withValues(alpha: 0.18),
+              width: 1,
+            ),
           ),
         ),
         appBarTheme: const AppBarTheme(
@@ -101,7 +110,7 @@ class MoneyManagementApp extends StatelessWidget {
           contentTextStyle: const TextStyle(color: Colors.white),
         ),
         navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: AppDesignTokens.surface,
+          backgroundColor: AppDesignTokens.surfaceCardTranslucent,
           indicatorColor: const Color(0x663D5BD5),
           height: 66,
           labelTextStyle: WidgetStateProperty.resolveWith((states) {

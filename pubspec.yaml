@@ -11,27 +11,29 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
   supabase_flutter: ^2.9.1
-  flutter_dotenv: ^5.1.0
+  flutter_dotenv: ^6.0.0
   intl: ^0.20.2
   http: ^1.2.2
   shared_preferences: ^2.3.2
-  flutter_local_notifications: ^17.2.2
-  timezone: ^0.9.4
-  app_links: ^6.4.1
+  flutter_local_notifications: ^21.0.0
+  timezone: ^0.11.0
+  app_links: ^7.0.0
   google_mobile_ads: ^7.0.0
-  connectivity_plus: ^6.1.1
+  connectivity_plus: ^7.1.0
   fl_chart: ^1.2.0
-  purchases_flutter: ^9.15.1
-  purchases_ui_flutter: ^9.15.1
-  share_plus: ^12.0.1
+  purchases_flutter: ^9.16.0
+  purchases_ui_flutter: ^9.16.0
+  share_plus: ^12.0.2
+  url_launcher: ^6.3.0
   path_provider: ^2.1.5
+  google_generative_ai: ^0.4.7
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   integration_test:
     sdk: flutter
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
 
 flutter:
@@ -44,3 +46,9 @@ flutter_launcher_icons:
   ios: true
   image_path: "download.jpg"
   remove_alpha_ios: true
+
+# Upstream flutter_local_notifications_windows builds C++ that needs MSVC ATL
+# (atlbase.h). This app does not use local notifications on Windows.
+dependency_overrides:
+  flutter_local_notifications_windows:
+    path: packages/flutter_local_notifications_windows

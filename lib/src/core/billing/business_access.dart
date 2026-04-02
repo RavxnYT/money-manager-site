@@ -85,6 +85,26 @@ class BusinessAccessState {
     );
   }
 
+  /// Whether [profile] indicates Business Pro is currently entitled, per fields
+  /// last synced from a device with RevenueCat (mobile). Used on Windows/macOS/Linux
+  /// where the Purchases SDK does not run.
+  static bool profileIndicatesEntitledSubscription(Map<String, dynamic>? profile) {
+    final raw = (profile?['business_pro_status'] ?? 'inactive')
+        .toString()
+        .trim()
+        .toLowerCase();
+    switch (raw) {
+      case 'active':
+      case 'trial':
+      case 'lifetime':
+      case 'billing_issue':
+      case 'grace_period':
+        return true;
+      default:
+        return false;
+    }
+  }
+
   factory BusinessAccessState.fromSources({
     Map<String, dynamic>? profile,
     required bool entitlementActive,

@@ -5,6 +5,7 @@ import '../../core/config/business_features_config.dart';
 import '../../core/categories/category_branding.dart';
 import '../../core/categories/category_icon_utils.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
@@ -55,7 +56,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     return showDialog<_CategoryDraft>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: Text(
             initialCategory == null
                 ? 'New ${_type[0].toUpperCase()}${_type.substring(1)} Category'
@@ -260,7 +261,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   Future<void> _deleteCategory(Map<String, dynamic> category) async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => AppAlertDialog(
         title: const Text('Delete Category'),
         content: Text('Delete "${category['name']}"?'),
         actions: [

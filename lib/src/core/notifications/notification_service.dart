@@ -15,6 +15,8 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
   bool _initialized = false;
 
+  /// Bill / recurring reminders are mobile-only (Android & iOS).
+  /// Windows and other desktops skip scheduling entirely; the rest of the app runs the same.
   bool get _isSupportedPlatform {
     if (kIsWeb) return false;
     return Platform.isAndroid || Platform.isIOS;
@@ -27,7 +29,7 @@ class NotificationService {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings();
     const settings = InitializationSettings(android: android, iOS: ios);
-    await _plugin.initialize(settings);
+    await _plugin.initialize(settings: settings);
 
     tz.initializeTimeZones();
     _initialized = true;
@@ -80,11 +82,11 @@ class NotificationService {
     if (at.isBefore(tz.TZDateTime.now(tz.local))) return;
 
     await _plugin.zonedSchedule(
-      id,
-      'Bill due: $title',
-      'Amount: $amount • Tap to pay in app',
-      at,
-      const NotificationDetails(
+      id: id,
+      title: 'Bill due: $title',
+      body: 'Amount: $amount • Tap to pay in app',
+      scheduledDate: at,
+      notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
           'bill_reminders',
           'Bill reminders',
@@ -94,10 +96,8 @@ class NotificationService {
         ),
         iOS: DarwinNotificationDetails(),
       ),
-      androidAllowWhileIdle: true,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       payload: 'bill:${bill['id']}',
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
     );
   }
 
@@ -115,24 +115,22 @@ class NotificationService {
     if (at.isBefore(tz.TZDateTime.now(tz.local))) return;
 
     await _plugin.zonedSchedule(
-      id,
-      'Recurring $kind due today',
-      'Amount: $amount • Open app to process',
-      at,
-      const NotificationDetails(
+      id: id,
+      title: 'Subscription ($kind) due today',
+      body: 'Amount: $amount • Open app to process',
+      scheduledDate: at,
+      notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
           'recurring_reminders',
-          'Recurring reminders',
-          channelDescription: 'Upcoming recurring transaction reminders',
+          'Subscription reminders',
+          channelDescription: 'Upcoming subscription / recurring charge reminders',
           importance: Importance.high,
           priority: Priority.high,
         ),
         iOS: DarwinNotificationDetails(),
       ),
-      androidAllowWhileIdle: true,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       payload: 'recurring:${rule['id']}',
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
     );
   }
 

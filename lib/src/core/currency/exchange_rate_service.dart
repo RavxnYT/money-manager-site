@@ -83,7 +83,7 @@ class ExchangeRateService {
     final intervalMinutesRaw =
         (Duration.minutesPerDay / requestsPerDay).floor();
     final intervalMinutes =
-        (intervalMinutesRaw.clamp(1, Duration.minutesPerDay) as int);
+        intervalMinutesRaw.clamp(1, Duration.minutesPerDay);
     return Duration(minutes: intervalMinutes);
   }
 

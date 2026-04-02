@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
+import '../../core/finance/account_category_defaults.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
@@ -68,7 +70,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
       context: context,
       builder: (_) => StatefulBuilder(
         builder: (context, setInnerState) {
-          return AlertDialog(
+          return AppAlertDialog(
             title: const Text('Add Account'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -78,7 +80,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
                     decoration: const InputDecoration(labelText: 'Name')),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
-                  value: type,
+                  key: ValueKey('add-type-$type'),
+                  initialValue: type,
                   items: const [
                     DropdownMenuItem(value: 'cash', child: Text('Cash')),
                     DropdownMenuItem(value: 'bank', child: Text('Bank')),
@@ -91,7 +94,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
-                  value: currencyCode,
+                  key: ValueKey('add-ccy-$currencyCode'),
+                  initialValue: currencyCode,
                   items: supportedCurrencyCodes
                       .map((code) => DropdownMenuItem<String>(
                           value: code, child: Text(code)))
@@ -137,6 +141,33 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   Future<void> _editAccount(Map<String, dynamic> account) async {
+    final accountId = account['id'].toString();
+    List<Map<String, dynamic>> expenseCats = [];
+    List<Map<String, dynamic>> incomeCats = [];
+    try {
+      expenseCats = await widget.repository.fetchCategories('expense');
+      incomeCats = await widget.repository.fetchCategories('income');
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('Could not load categories. Try again when you have a connection.'),
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+    var defaultExpenseId = await AccountCategoryDefaults.defaultCategoryId(
+      accountId: accountId,
+      kind: 'expense',
+    );
+    var defaultIncomeId = await AccountCategoryDefaults.defaultCategoryId(
+      accountId: accountId,
+      kind: 'income',
+    );
+    if (!mounted) return;
+
     final name =
         TextEditingController(text: (account['name'] ?? '').toString());
     final currentBalance =
@@ -149,48 +180,101 @@ class _AccountsScreenState extends State<AccountsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Edit Account'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: name,
-                decoration: const InputDecoration(labelText: 'Name'),
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                value: type,
-                items: const [
-                  DropdownMenuItem(value: 'cash', child: Text('Cash')),
-                  DropdownMenuItem(value: 'bank', child: Text('Bank')),
-                  DropdownMenuItem(value: 'card', child: Text('Card')),
-                  DropdownMenuItem(value: 'ewallet', child: Text('E-wallet')),
-                  DropdownMenuItem(value: 'other', child: Text('Other')),
-                ],
-                onChanged: (value) => setInnerState(() => type = value ?? type),
-                decoration: const InputDecoration(labelText: 'Type'),
-              ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                value: currencyCode,
-                items: supportedCurrencyCodes
-                    .map((code) => DropdownMenuItem<String>(
-                        value: code, child: Text(code)))
-                    .toList(),
-                onChanged: (value) =>
-                    setInnerState(() => currencyCode = value ?? currencyCode),
-                decoration: const InputDecoration(labelText: 'Currency'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: balance,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                inputFormatters: [AmountInputFormatter()],
-                decoration: const InputDecoration(labelText: 'Current Balance'),
-              ),
-            ],
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: name,
+                  decoration: const InputDecoration(labelText: 'Name'),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  key: ValueKey('edit-type-$type'),
+                  initialValue: type,
+                  items: const [
+                    DropdownMenuItem(value: 'cash', child: Text('Cash')),
+                    DropdownMenuItem(value: 'bank', child: Text('Bank')),
+                    DropdownMenuItem(value: 'card', child: Text('Card')),
+                    DropdownMenuItem(value: 'ewallet', child: Text('E-wallet')),
+                    DropdownMenuItem(value: 'other', child: Text('Other')),
+                  ],
+                  onChanged: (value) => setInnerState(() => type = value ?? type),
+                  decoration: const InputDecoration(labelText: 'Type'),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  key: ValueKey('edit-ccy-$currencyCode'),
+                  initialValue: currencyCode,
+                  items: supportedCurrencyCodes
+                      .map((code) => DropdownMenuItem<String>(
+                          value: code, child: Text(code)))
+                      .toList(),
+                  onChanged: (value) =>
+                      setInnerState(() => currencyCode = value ?? currencyCode),
+                  decoration: const InputDecoration(labelText: 'Currency'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: balance,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [AmountInputFormatter()],
+                  decoration:
+                      const InputDecoration(labelText: 'Current Balance'),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String?>(
+                  key: ValueKey('edit-defexp-$defaultExpenseId'),
+                  initialValue:
+                      _validCategoryId(defaultExpenseId, expenseCats),
+                  isExpanded: true,
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('No default'),
+                    ),
+                    ...expenseCats.map(
+                      (c) => DropdownMenuItem<String?>(
+                        value: c['id']?.toString(),
+                        child: Text((c['name'] ?? '').toString()),
+                      ),
+                    ),
+                  ],
+                  onChanged: (v) =>
+                      setInnerState(() => defaultExpenseId = v),
+                  decoration: const InputDecoration(
+                    labelText: 'Smart default: expense category',
+                    helperText: 'Used when you add expenses from this account',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String?>(
+                  key: ValueKey('edit-definc-$defaultIncomeId'),
+                  initialValue: _validCategoryId(defaultIncomeId, incomeCats),
+                  isExpanded: true,
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('No default'),
+                    ),
+                    ...incomeCats.map(
+                      (c) => DropdownMenuItem<String?>(
+                        value: c['id']?.toString(),
+                        child: Text((c['name'] ?? '').toString()),
+                      ),
+                    ),
+                  ],
+                  onChanged: (v) => setInnerState(() => defaultIncomeId = v),
+                  decoration: const InputDecoration(
+                    labelText: 'Smart default: income category',
+                    helperText: 'Used when you add income to this account',
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -207,15 +291,34 @@ class _AccountsScreenState extends State<AccountsScreen> {
     final parsedBalance = parseFormattedAmount(balance.text);
     if (ok == true && name.text.trim().isNotEmpty && parsedBalance != null) {
       await widget.repository.updateAccount(
-        accountId: account['id'].toString(),
+        accountId: accountId,
         name: name.text.trim(),
         type: type,
         currencyCode: currencyCode,
         currentBalance: parsedBalance,
       );
+      await AccountCategoryDefaults.setDefaultCategoryId(
+        accountId: accountId,
+        kind: 'expense',
+        categoryId: defaultExpenseId,
+      );
+      await AccountCategoryDefaults.setDefaultCategoryId(
+        accountId: accountId,
+        kind: 'income',
+        categoryId: defaultIncomeId,
+      );
       if (!mounted) return;
       _reload();
     }
+  }
+
+  String? _validCategoryId(
+    String? id,
+    List<Map<String, dynamic>> categories,
+  ) {
+    if (id == null || id.isEmpty) return null;
+    final ok = categories.any((c) => c['id']?.toString() == id);
+    return ok ? id : null;
   }
 
   Future<void> _deleteAccount(Map<String, dynamic> account) async {
@@ -227,7 +330,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
         context: context,
         builder: (dialogContext) => StatefulBuilder(
           builder: (context, setInnerState) {
-            return AlertDialog(
+            return AppAlertDialog(
               title: const Text('Delete account'),
               content: SingleChildScrollView(
                 child: Column(
@@ -323,7 +426,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Exchange Account Currency'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -331,7 +434,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
               Text('From: $fromCurrency'),
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
-                value: target,
+                key: ValueKey('exch-$target'),
+                initialValue: target,
                 items: supportedCurrencyCodes
                     .where((c) => c != fromCurrency)
                     .map((code) => DropdownMenuItem<String>(

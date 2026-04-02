@@ -5,20 +5,30 @@ import '../../core/categories/category_icon_utils.dart';
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/friendly_error.dart';
 import '../../core/notifications/notification_service.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
 
 class BillsScreen extends StatefulWidget {
-  const BillsScreen({super.key, required this.repository});
+  const BillsScreen({
+    super.key,
+    required this.repository,
+    this.embedInHub = false,
+  });
 
   final AppRepository repository;
 
+  /// Hides app bar + FAB when hosted inside [BillsSubscriptionsHubScreen].
+  final bool embedInHub;
+
   @override
-  State<BillsScreen> createState() => _BillsScreenState();
+  State<BillsScreen> createState() => BillsScreenState();
 }
 
-class _BillsScreenState extends State<BillsScreen> {
+class BillsScreenState extends State<BillsScreen> {
+  void openCreateBill() => _createBill();
+
   late Future<List<Map<String, dynamic>>> _future;
 
   @override
@@ -62,12 +72,13 @@ class _BillsScreenState extends State<BillsScreen> {
     String accountId = accounts.first['id'].toString();
     String? categoryId;
     final categories = await widget.repository.fetchCategories('expense');
+    if (!mounted) return;
     if (categories.isNotEmpty) categoryId = categories.first['id'].toString();
 
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Create Bill Reminder'),
           content: SingleChildScrollView(
             child: Column(
@@ -87,7 +98,7 @@ class _BillsScreenState extends State<BillsScreen> {
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
-                  value: accountId,
+                  initialValue: accountId,
                   items: accounts
                       .map((e) => DropdownMenuItem<String>(
                             value: e['id'].toString(),
@@ -100,7 +111,7 @@ class _BillsScreenState extends State<BillsScreen> {
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
-                  value: categories.any((e) => e['id'].toString() == categoryId)
+                  initialValue: categories.any((e) => e['id'].toString() == categoryId)
                       ? categoryId
                       : null,
                   items: categories
@@ -126,7 +137,7 @@ class _BillsScreenState extends State<BillsScreen> {
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
-                  value: frequency,
+                  initialValue: frequency,
                   items: const [
                     DropdownMenuItem(value: 'once', child: Text('One-time')),
                     DropdownMenuItem(value: 'weekly', child: Text('Weekly')),
@@ -196,39 +207,39 @@ class _BillsScreenState extends State<BillsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final messenger = ScaffoldMessenger.of(context);
     final currency = NumberFormat.currency(symbol: '\$');
-    return Scaffold(
-      appBar: AppBar(title: const Text('Bill Reminders')),
-      body: AppPageScaffold(
-        child: RefreshIndicator(
-          onRefresh: _reload,
-          child: FutureBuilder<List<Map<String, dynamic>>>(
-            future: _future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (snapshot.hasError) {
-                return ListView(
-                  children: [
-                    const SizedBox(height: 120),
-                    Center(child: Text(friendlyErrorMessage(snapshot.error))),
-                  ],
-                );
-              }
-              final rows = snapshot.data ?? [];
-              if (rows.isEmpty) {
-                return ListView(
-                  children: const [
-                    SizedBox(height: 120),
-                    Center(child: Text('No bill reminders yet')),
-                  ],
-                );
-              }
-              return ListView.builder(
-                padding: const EdgeInsets.only(bottom: 108),
+    final bottomPad = widget.embedInHub ? 88.0 : 108.0;
+    final body = AppPageScaffold(
+      child: RefreshIndicator(
+        onRefresh: _reload,
+        child: FutureBuilder<List<Map<String, dynamic>>>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return ListView(
+                children: [
+                  const SizedBox(height: 120),
+                  Center(child: Text(friendlyErrorMessage(snapshot.error))),
+                ],
+              );
+            }
+            final rows = snapshot.data ?? [];
+            if (rows.isEmpty) {
+              return ListView(
+                children: const [
+                  SizedBox(height: 120),
+                  Center(child: Text('No bill reminders yet')),
+                ],
+              );
+            }
+            return ListView.builder(
+              padding: EdgeInsets.only(bottom: bottomPad),
                 itemCount: rows.length,
-                itemBuilder: (context, index) {
+                itemBuilder: (_, index) {
                   final row = rows[index];
                   final amount = ((row['amount'] as num?) ?? 0).toDouble();
                   final dueDate =
@@ -264,7 +275,7 @@ class _BillsScreenState extends State<BillsScreen> {
                                   _reload();
                                 } catch (e) {
                                   if (!mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
+                                  messenger.showSnackBar(
                                     SnackBar(
                                         content: Text(friendlyErrorMessage(e))),
                                   );
@@ -280,14 +291,21 @@ class _BillsScreenState extends State<BillsScreen> {
                   );
                 },
               );
-            },
-          ),
+          },
         ),
       ),
+    );
+
+    if (widget.embedInHub) {
+      return body;
+    }
+    return Scaffold(
+      appBar: AppBar(title: const Text('Bill reminders')),
+      body: body,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createBill,
         icon: const Icon(Icons.add_alert_rounded),
-        label: const Text('Add Bill'),
+        label: const Text('Add bill'),
       ),
     );
   }

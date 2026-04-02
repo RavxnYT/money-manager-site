@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -5,7 +7,11 @@ import '../../core/categories/category_icon_utils.dart';
 import '../../core/datetime/transaction_datetime.dart';
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
+import '../../core/finance/category_correction_learning.dart';
+import '../../core/finance/category_suggestion_service.dart';
+import '../../core/finance/transaction_note_memory.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/searchable_id_picker_sheet.dart';
 import '../../core/usage/transaction_creation_usage_store.dart';
@@ -23,9 +29,11 @@ class TransactionsScreen extends StatefulWidget {
 class _TransactionsScreenState extends State<TransactionsScreen> {
   late Future<List<Map<String, dynamic>>> _future;
   final _searchController = TextEditingController();
+  StreamSubscription<int>? _dataSubscription;
   String _kindFilter = 'all';
   String _sortFilter = 'newest';
   String _defaultCurrency = 'USD';
+  bool _workspaceReadOnly = false;
 
   String _relationName(dynamic relation) {
     if (relation is Map) {
@@ -56,6 +64,83 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         DateTime.fromMillisecondsSinceEpoch(0);
   }
 
+  /// Local calendar date (no time) for grouping.
+  DateTime _transactionLocalDay(Map<String, dynamic> row) {
+    final dt = _transactionDateValue(row);
+    final l = dt.toLocal();
+    return DateTime(l.year, l.month, l.day);
+  }
+
+  bool _isDatePickerStyleMidnightLocal(DateTime local) {
+    return local.hour == 0 &&
+        local.minute == 0 &&
+        local.second == 0 &&
+        local.millisecond == 0 &&
+        local.microsecond == 0;
+  }
+
+  /// Instant for date-based ordering within the same local day. Manual rows that
+  /// only carry a calendar day (local midnight after parsing) are treated as
+  /// end-of-day for "newest" so managed ledger rows using real timestamps
+  /// (`now()` for savings, etc.) do not always appear above them.
+  DateTime _transactionSortInstant(
+    Map<String, dynamic> row, {
+    required bool newestFirst,
+  }) {
+    final dt = _transactionDateValue(row);
+    final l = dt.toLocal();
+    if (!_isManagedTransaction(row) && _isDatePickerStyleMidnightLocal(l)) {
+      if (newestFirst) {
+        return DateTime(l.year, l.month, l.day, 23, 59, 59, 999);
+      }
+      return DateTime(l.year, l.month, l.day);
+    }
+    return l;
+  }
+
+  int _compareTransactionRows(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b,
+    String sortFilter,
+  ) {
+    final amountA = ((a['amount'] as num?) ?? 0).toDouble();
+    final amountB = ((b['amount'] as num?) ?? 0).toDouble();
+
+    switch (sortFilter) {
+      case 'oldest':
+        final dayCmp =
+            _transactionLocalDay(a).compareTo(_transactionLocalDay(b));
+        if (dayCmp != 0) return dayCmp;
+        final instA = _transactionSortInstant(a, newestFirst: false);
+        final instB = _transactionSortInstant(b, newestFirst: false);
+        final instCmp = instA.compareTo(instB);
+        if (instCmp != 0) return instCmp;
+        break;
+      case 'amount_desc':
+        final c = amountB.compareTo(amountA);
+        if (c != 0) return c;
+        break;
+      case 'amount_asc':
+        final c = amountA.compareTo(amountB);
+        if (c != 0) return c;
+        break;
+      case 'newest':
+      default:
+        final dayCmp =
+            _transactionLocalDay(b).compareTo(_transactionLocalDay(a));
+        if (dayCmp != 0) return dayCmp;
+        final instA = _transactionSortInstant(a, newestFirst: true);
+        final instB = _transactionSortInstant(b, newestFirst: true);
+        final instCmp = instB.compareTo(instA);
+        if (instCmp != 0) return instCmp;
+        break;
+    }
+
+    final idA = (a['id'] ?? '').toString();
+    final idB = (b['id'] ?? '').toString();
+    return idA.compareTo(idB);
+  }
+
   String? _managedTransactionSource(Map<String, dynamic> row) {
     final raw = (row['source_type'] ?? '').toString().trim();
     return raw.isEmpty ? null : raw;
@@ -78,11 +163,93 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     }
   }
 
+  Future<bool> _confirmDeleteTransactionDialog({
+    required BuildContext context,
+    required String kind,
+    required String account,
+    required String transferAccount,
+    required double ledgerAmount,
+    required String srcCurLedger,
+    required String noteText,
+    required String date,
+    Widget? transferDeleteExtra,
+  }) async {
+    final dest = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AppAlertDialog(
+        title: const Text('Delete transaction?'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'The amount will be refunded or '
+                'removed from the related '
+                'account(s) so your balance stays '
+                'correct.',
+                style: Theme.of(ctx).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                kind == 'transfer'
+                    ? '$account → $transferAccount'
+                    : account,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${kind.toUpperCase()} • '
+                '${formatMoney(ledgerAmount, currencyCode: srcCurLedger)}',
+              ),
+              Text(date),
+              if (transferDeleteExtra != null) transferDeleteExtra,
+              const SizedBox(height: 16),
+              Text(
+                'Note',
+                style: Theme.of(ctx).textTheme.labelLarge,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                noteText.isEmpty ? '—' : noteText,
+                style: TextStyle(
+                  color: noteText.isEmpty ? Colors.white38 : Colors.white70,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFE53935),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    return dest ?? false;
+  }
+
   @override
   void initState() {
     super.initState();
     _loadDefaultCurrency();
+    unawaited(_refreshWorkspaceReadOnly());
     _future = _loadTransactionsView();
+    _dataSubscription = widget.repository.dataChanges.listen((_) {
+      if (!mounted) return;
+      unawaited(_refreshWorkspaceReadOnly());
+    });
   }
 
   Future<void> _loadDefaultCurrency() async {
@@ -91,13 +258,26 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     setState(() => _defaultCurrency = code);
   }
 
+  Future<void> _refreshWorkspaceReadOnly() async {
+    try {
+      final ro = await widget.repository.isActiveWorkspaceReadOnly();
+      if (!mounted) return;
+      setState(() => _workspaceReadOnly = ro);
+    } catch (_) {
+      // Non-blocking: default allows edits.
+    }
+  }
+
   @override
   void dispose() {
+    _dataSubscription?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
   Future<void> _reload() async {
+    await _refreshWorkspaceReadOnly();
+    if (!mounted) return;
     setState(() {
       _future = _loadTransactionsView();
     });
@@ -175,23 +355,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                 }
                 return false;
               }).toList()
-                ..sort((a, b) {
-                  final amountA = ((a['amount'] as num?) ?? 0).toDouble();
-                  final amountB = ((b['amount'] as num?) ?? 0).toDouble();
-                  final dateA = _transactionDateValue(a);
-                  final dateB = _transactionDateValue(b);
-                  switch (_sortFilter) {
-                    case 'oldest':
-                      return dateA.compareTo(dateB);
-                    case 'amount_desc':
-                      return amountB.compareTo(amountA);
-                    case 'amount_asc':
-                      return amountA.compareTo(amountB);
-                    case 'newest':
-                    default:
-                      return dateB.compareTo(dateA);
-                  }
-                });
+                ..sort((a, b) =>
+                    _compareTransactionRows(a, b, _sortFilter));
 
               if (rows.isEmpty) {
                 return ListView(
@@ -233,7 +398,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
                     child: DropdownButtonFormField<String>(
-                      value: _sortFilter,
+                      initialValue: _sortFilter,
                       items: const [
                         DropdownMenuItem(
                             value: 'newest', child: Text('Newest')),
@@ -389,6 +554,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                       );
                                       return;
                                     }
+                                    if (_workspaceReadOnly) {
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'View-only workspace: editing is disabled.',
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
                                     final saved = await showDialog<bool>(
                                       context: context,
                                       builder: (ctx) => _EditTransactionDialog(
@@ -398,6 +575,58 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                     );
                                     if (saved == true) _reload();
                                   },
+                                  onLongPress: (isManaged || _workspaceReadOnly)
+                                      ? null
+                                      : () async {
+                                          final id =
+                                              row['id']?.toString() ?? '';
+                                          if (id.isEmpty) return;
+                                          if (widget.repository
+                                              .isOfflinePendingId(id)) {
+                                            if (!context.mounted) return;
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'Sync when online before deleting this transaction.',
+                                                ),
+                                              ),
+                                            );
+                                            return;
+                                          }
+                                          if (!context.mounted) return;
+                                          final confirmed =
+                                              await _confirmDeleteTransactionDialog(
+                                            context: context,
+                                            kind: kind,
+                                            account: account,
+                                            transferAccount: transferAccount,
+                                            ledgerAmount: ledgerAmount,
+                                            srcCurLedger:
+                                                srcCurLedger.toString(),
+                                            noteText: noteText,
+                                            date: date,
+                                            transferDeleteExtra:
+                                                transferDeleteExtra,
+                                          );
+                                          if (!mounted) return;
+                                          if (!confirmed) return;
+                                          try {
+                                            await widget.repository
+                                                .deleteTransaction(id);
+                                            _reload();
+                                          } catch (e) {
+                                            if (!context.mounted) return;
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  friendlyErrorMessage(e),
+                                                ),
+                                              ),
+                                            );
+                                          }
+                                        },
                                   contentPadding: const EdgeInsets.symmetric(
                                       horizontal: 14, vertical: 6),
                                   leading: Container(
@@ -405,7 +634,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                     width: 42,
                                     decoration: BoxDecoration(
                                       borderRadius: BorderRadius.circular(13),
-                                      color: amountColor.withOpacity(0.18),
+                                      color:
+                                          amountColor.withValues(alpha: 0.18),
                                     ),
                                     child: Icon(
                                       leadingIcon,
@@ -434,7 +664,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                         horizontal: 10, vertical: 4),
                                     decoration: BoxDecoration(
                                       borderRadius: BorderRadius.circular(30),
-                                      color: Colors.white.withOpacity(0.08),
+                                      color:
+                                          Colors.white.withValues(alpha: 0.08),
                                     ),
                                     child: Text(
                                       isManaged
@@ -446,104 +677,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                 ),
                               );
 
-                              if (isManaged) {
-                                return tile;
-                              }
-
-                              return Dismissible(
-                                key: ValueKey(row['id']),
-                                direction: DismissDirection.endToStart,
-                                background: Container(
-                                  color: Colors.red,
-                                  alignment: Alignment.centerRight,
-                                  padding: const EdgeInsets.only(right: 20),
-                                  child: const Icon(Icons.delete,
-                                      color: Colors.white),
-                                ),
-                                confirmDismiss: (_) async {
-                                  final dest = await showDialog<bool>(
-                                    context: context,
-                                    barrierDismissible: false,
-                                    builder: (ctx) => AlertDialog(
-                                      title: const Text('Delete transaction?'),
-                                      content: SingleChildScrollView(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              'The amount will be refunded or '
-                                              'removed from the related '
-                                              'account(s) so your balance stays '
-                                              'correct.',
-                                              style: Theme.of(ctx)
-                                                  .textTheme
-                                                  .bodyMedium,
-                                            ),
-                                            const SizedBox(height: 16),
-                                            Text(
-                                              kind == 'transfer'
-                                                  ? '$account → $transferAccount'
-                                                  : account,
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 6),
-                                            Text(
-                                              '${kind.toUpperCase()} • '
-                                              '${formatMoney(ledgerAmount, currencyCode: srcCurLedger)}',
-                                            ),
-                                            Text(date),
-                                            if (transferDeleteExtra != null)
-                                              transferDeleteExtra,
-                                            const SizedBox(height: 16),
-                                            Text(
-                                              'Note',
-                                              style: Theme.of(ctx)
-                                                  .textTheme
-                                                  .labelLarge,
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              noteText.isEmpty ? '—' : noteText,
-                                              style: TextStyle(
-                                                color: noteText.isEmpty
-                                                    ? Colors.white38
-                                                    : Colors.white70,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () =>
-                                              Navigator.pop(ctx, false),
-                                          child: const Text('Cancel'),
-                                        ),
-                                        FilledButton(
-                                          style: FilledButton.styleFrom(
-                                            backgroundColor:
-                                                const Color(0xFFE53935),
-                                          ),
-                                          onPressed: () =>
-                                              Navigator.pop(ctx, true),
-                                          child: const Text('Delete'),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                  return dest ?? false;
-                                },
-                                onDismissed: (_) async {
-                                  await widget.repository
-                                      .deleteTransaction(row['id'] as String);
-                                  _reload();
-                                },
-                                child: tile,
-                              );
+                              return tile;
                             },
                           ),
                   ),
@@ -553,18 +687,20 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final created = await showDialog<bool>(
-            context: context,
-            builder: (context) =>
-                _CreateTransactionDialog(repository: widget.repository),
-          );
-          if (created == true) _reload();
-        },
-        label: const Text('Add'),
-        icon: const Icon(Icons.add),
-      ),
+      floatingActionButton: _workspaceReadOnly
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () async {
+                final created = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => _CreateTransactionDialog(
+                      repository: widget.repository),
+                );
+                if (created == true) _reload();
+              },
+              label: const Text('Add'),
+              icon: const Icon(Icons.add),
+            ),
     );
   }
 }
@@ -604,6 +740,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
   DateTime _date = DateTime.now();
   bool _loading = false;
   Map<String, int> _usageScores = {};
+  Timer? _noteMemoryTimer;
 
   List<Map<String, dynamic>> _uniqueById(List<Map<String, dynamic>> source) {
     final seen = <String>{};
@@ -621,7 +758,47 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
   void initState() {
     super.initState();
     _amountController.addListener(_refreshConversionPreview);
+    _noteController.addListener(_scheduleSmartCategoryHint);
     _load();
+  }
+
+  void _scheduleSmartCategoryHint() {
+    _noteMemoryTimer?.cancel();
+    _noteMemoryTimer = Timer(const Duration(milliseconds: 450), () async {
+      if (!mounted || _kind == 'transfer') return;
+      final note = _noteController.text.trim();
+      if (note.length < 2) return;
+      await _runSmartCategory(showSnack: true);
+    });
+  }
+
+  Future<void> _runSmartCategory({required bool showSnack}) async {
+    if (_kind == 'transfer' || !mounted) return;
+    final recent = await widget.repository.fetchTransactions();
+    if (!mounted) return;
+    final sug = await CategorySuggestionService.suggest(
+      kind: _kind,
+      note: _noteController.text.trim().isEmpty
+          ? null
+          : _noteController.text.trim(),
+      accountId: _accountId,
+      categories: _categories,
+      recentSameKindTransactions: recent,
+    );
+    if (!mounted || sug == null) return;
+    if (!_categories.any((c) => c['id']?.toString() == sug.categoryId)) {
+      return;
+    }
+    if (_categoryId == sug.categoryId) return;
+    setState(() => _categoryId = sug.categoryId);
+    if (showSnack && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Category: ${sug.source}'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   double? _parseAmountInput(String? value) {
@@ -672,6 +849,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
         _ensureTransferEntityDefaults();
       });
       await _refreshConversionPreview();
+      await _runSmartCategory(showSnack: false);
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -925,6 +1103,27 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
         .toList();
   }
 
+  /// When paying a loan from a savings goal, both "I owe them" and "they owe me" loans are allowed.
+  List<Map<String, dynamic>> _loanDestinationOptions() {
+    if (_kind == 'transfer' &&
+        _transferFromKind == 'savings_goal' &&
+        _transferToKind == 'loan') {
+      return _uniqueById(_loans);
+    }
+    return _loansOwedByMe();
+  }
+
+  static String _loanDirectionLabel(String direction) {
+    switch (direction) {
+      case 'owed_to_me':
+        return 'They owe me';
+      case 'owed_by_me':
+        return 'I owe them';
+      default:
+        return direction;
+    }
+  }
+
   List<Map<String, dynamic>> _toSavingsGoalOptions() {
     final all = _uniqueById(_savingsGoals);
     if (_transferFromKind == 'savings_goal' &&
@@ -986,9 +1185,8 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
     if (ua.length > 1) {
       final first = ua.first['id']?.toString();
       final second = ua[1]['id']?.toString();
-      _transferToEntityId = _transferToEntityId == null
-          ? (first != second ? second : first)
-          : _transferToEntityId;
+      _transferToEntityId =
+          _transferToEntityId ?? (first != second ? second : first);
     } else {
       _transferToEntityId ??= ua.first['id']?.toString();
     }
@@ -1034,7 +1232,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
       return opts.first['id']?.toString();
     }
     if (kind == 'loan') {
-      final list = isFrom ? _loansOwedToMe() : _loansOwedByMe();
+      final list = isFrom ? _loansOwedToMe() : _loanDestinationOptions();
       if (list.isEmpty) return null;
       return list.first['id']?.toString();
     }
@@ -1101,7 +1299,9 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
 
   @override
   void dispose() {
+    _noteMemoryTimer?.cancel();
     _amountController.removeListener(_refreshConversionPreview);
+    _noteController.removeListener(_scheduleSmartCategoryHint);
     _amountController.dispose();
     _noteController.dispose();
     super.dispose();
@@ -1245,6 +1445,28 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
         transferAccountId: null,
         transferCreditAmount: null,
       );
+      if (note != null &&
+          note.isNotEmpty &&
+          _categoryId != null &&
+          _categoryId!.isNotEmpty) {
+        final recent = await widget.repository.fetchTransactions();
+        final sug = await CategorySuggestionService.suggest(
+          kind: _kind,
+          note: note,
+          accountId: _accountId,
+          categories: _categories,
+          recentSameKindTransactions: recent,
+        );
+        await CategoryCorrectionLearning.recordOverrideIfSuggested(
+          note: note,
+          chosenCategoryId: _categoryId!,
+          suggestion: sug,
+        );
+        await TransactionNoteMemory.remember(
+          note: note,
+          categoryId: _categoryId,
+        );
+      }
       await _recordCreationUsageAfterSave();
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -1286,7 +1508,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
           ? selectedId
           : savingsOptions.first['id']?.toString();
       return DropdownButtonFormField<String>(
-        value: safe,
+        initialValue: safe,
         isExpanded: true,
         items: savingsOptions
             .map((e) => DropdownMenuItem<String>(
@@ -1311,13 +1533,14 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
           ? selectedId
           : loanOptions.first['id']?.toString();
       return DropdownButtonFormField<String>(
-        value: safe,
+        initialValue: safe,
         isExpanded: true,
         items: loanOptions
             .map((e) => DropdownMenuItem<String>(
                   value: e['id'].toString(),
                   child: Text(
-                    '${(e['person_name'] ?? '').toString()} • ${(e['currency_code'] ?? '').toString().toUpperCase()}',
+                    '${(e['person_name'] ?? '').toString()} • ${(e['currency_code'] ?? '').toString().toUpperCase()}'
+                    ' • ${_loanDirectionLabel((e['direction'] ?? '').toString())}',
                   ),
                 ))
             .toList(),
@@ -1331,19 +1554,27 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
   @override
   Widget build(BuildContext context) {
     final uniqueAccounts = _uniqueById(_accounts);
+    final mq = MediaQuery.of(context);
+    final maxFormHeight = (mq.size.height -
+            mq.padding.vertical -
+            mq.viewInsets.bottom -
+            200)
+        .clamp(220.0, 560.0);
 
-    return AlertDialog(
+    return AppAlertDialog(
       title: const Text('Create Transaction'),
       content: SizedBox(
         width: 420,
         child: Form(
           key: _formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxFormHeight),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
                 DropdownButtonFormField<String>(
-                  value: _kind,
+                  initialValue: _kind,
                   isExpanded: true,
                   items: const [
                     DropdownMenuItem(value: 'expense', child: Text('Expense')),
@@ -1359,7 +1590,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                           ? <Map<String, dynamic>>[]
                           : await widget.repository.fetchCategories(value);
                     } catch (error) {
-                      if (!mounted) return;
+                      if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text(friendlyErrorMessage(error))),
                       );
@@ -1387,6 +1618,9 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                         _ensureTransferEntityDefaults();
                       }
                     });
+                    if (value != 'transfer') {
+                      await _runSmartCategory(showSnack: false);
+                    }
                   },
                 ),
                 const SizedBox(height: 10),
@@ -1476,11 +1710,14 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                     kind: _transferToKind,
                     selectedId: _transferToEntityId,
                     savingsOptions: _toSavingsGoalOptions(),
-                    loanOptions: _loansOwedByMe(),
+                    loanOptions: _loanDestinationOptions(),
                     uniqueAccounts: uniqueAccounts,
                     label: 'Destination',
                     emptyMessage:
-                        'Create another goal, or add an “I owe them” loan to pay from here.',
+                        _transferFromKind == 'savings_goal' &&
+                                _transferToKind == 'loan'
+                            ? 'Add a loan in the same currency as the source savings goal.'
+                            : 'Create another goal, or add an “I owe them” loan to pay from here.',
                     onChanged: (id) {
                       setState(() {
                         _transferToEntityId = id;
@@ -1509,6 +1746,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                     onSelected: (id) async {
                       setState(() => _accountId = id);
                       await _refreshConversionPreview();
+                      await _runSmartCategory(showSnack: false);
                     },
                   ),
                   const SizedBox(height: 10),
@@ -1526,8 +1764,9 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                   onChanged: (_) => _refreshConversionPreview(),
                   validator: (value) {
                     final parsed = _parseAmountInput(value);
-                    if (parsed == null || parsed <= 0)
+                    if (parsed == null || parsed <= 0) {
                       return 'Enter valid amount';
+                    }
                     return null;
                   },
                 ),
@@ -1612,6 +1851,7 @@ class _CreateTransactionDialogState extends State<_CreateTransactionDialog> {
                 ),
               ],
             ),
+            ),
           ),
         ),
       ),
@@ -1658,6 +1898,7 @@ class _EditTransactionDialogState extends State<_EditTransactionDialog> {
   List<Map<String, dynamic>> _categories = [];
   String? _categoryId;
   bool _loading = false;
+  Timer? _noteMemoryTimer;
 
   String _relationNameLocal(dynamic relation) {
     if (relation is Map) {
@@ -1725,7 +1966,30 @@ class _EditTransactionDialogState extends State<_EditTransactionDialog> {
     _amountController.text = _editDialogAmountInitialText(amt);
     _noteController.text = (widget.initial['note'] ?? '').toString();
     _categoryId = widget.initial['category_id']?.toString();
+    _noteController.addListener(_scheduleEditNoteMemoryLookup);
     _loadCategories();
+  }
+
+  void _scheduleEditNoteMemoryLookup() {
+    if (_kind == 'transfer') return;
+    _noteMemoryTimer?.cancel();
+    _noteMemoryTimer = Timer(const Duration(milliseconds: 450), () async {
+      if (!mounted) return;
+      final note = _noteController.text.trim();
+      if (note.length < 2) return;
+      final id = await TransactionNoteMemory.categoryIdForNote(note);
+      if (!mounted || id == null) return;
+      if (!_categories.any((c) => c['id']?.toString() == id)) return;
+      if (_categoryId == id) return;
+      setState(() => _categoryId = id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Category filled from a similar past note'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    });
   }
 
   Future<void> _loadCategories() async {
@@ -1751,6 +2015,8 @@ class _EditTransactionDialogState extends State<_EditTransactionDialog> {
 
   @override
   void dispose() {
+    _noteMemoryTimer?.cancel();
+    _noteController.removeListener(_scheduleEditNoteMemoryLookup);
     _amountController.dispose();
     _noteController.dispose();
     super.dispose();
@@ -1785,15 +2051,42 @@ class _EditTransactionDialogState extends State<_EditTransactionDialog> {
         }
       }
 
+      final noteOut = _noteController.text.trim().isEmpty
+          ? null
+          : _noteController.text.trim();
       await widget.repository.updateTransaction(
         transactionId: _transactionId,
         amount: amount,
         categoryId: _kind == 'transfer' ? null : _categoryId,
-        note: _noteController.text.trim().isEmpty
-            ? null
-            : _noteController.text.trim(),
+        note: noteOut,
         transferCreditAmount: transferCreditAmount,
       );
+      if (_kind != 'transfer' &&
+          noteOut != null &&
+          noteOut.isNotEmpty &&
+          _categoryId != null &&
+          _categoryId!.isNotEmpty) {
+        final acc = widget.initial['account'];
+        String? accountId;
+        if (acc is Map) accountId = acc['id']?.toString();
+        final recent = await widget.repository.fetchTransactions();
+        final sug = await CategorySuggestionService.suggest(
+          kind: _kind,
+          note: noteOut,
+          accountId: accountId,
+          categories: _categories,
+          recentSameKindTransactions: recent,
+        );
+        await CategoryCorrectionLearning.recordOverrideIfSuggested(
+          note: noteOut,
+          chosenCategoryId: _categoryId!,
+          suggestion: sug,
+        );
+        await TransactionNoteMemory.remember(
+          note: noteOut,
+          categoryId: _categoryId,
+        );
+      }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
@@ -1810,18 +2103,26 @@ class _EditTransactionDialogState extends State<_EditTransactionDialog> {
     final uniqueCategories = _uniqueById(_categories);
     final transferTo = _relationNameLocal(widget.initial['transfer_account']);
     final srcCur = _sourceAccountCurrency();
+    final mq = MediaQuery.of(context);
+    final maxFormHeight = (mq.size.height -
+            mq.padding.vertical -
+            mq.viewInsets.bottom -
+            200)
+        .clamp(220.0, 560.0);
 
-    return AlertDialog(
+    return AppAlertDialog(
       title: const Text('Edit transaction'),
       content: SizedBox(
         width: 420,
         child: Form(
           key: _formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxFormHeight),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                 Text(
                   'Type: ${_kind.toUpperCase()}',
                   style: Theme.of(context).textTheme.titleSmall,
@@ -1857,7 +2158,8 @@ class _EditTransactionDialogState extends State<_EditTransactionDialog> {
                 if (_kind != 'transfer') ...[
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: _safeSelectedCategory(_categoryId, uniqueCategories),
+                    initialValue:
+                        _safeSelectedCategory(_categoryId, uniqueCategories),
                     isExpanded: true,
                     items: uniqueCategories
                         .map((e) => DropdownMenuItem<String>(
@@ -1888,6 +2190,7 @@ class _EditTransactionDialogState extends State<_EditTransactionDialog> {
                       const InputDecoration(labelText: 'Note (optional)'),
                 ),
               ],
+            ),
             ),
           ),
         ),

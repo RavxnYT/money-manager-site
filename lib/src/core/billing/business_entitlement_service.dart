@@ -31,10 +31,25 @@ class BusinessEntitlementService extends ChangeNotifier {
   Offerings? _offerings;
 
   bool get isInitialized => _initialized;
-  bool get isAvailable => _forceBusinessPro || _configured;
+  /// True when the user should see Business Pro affordances (button not greyed out).
+  /// Includes desktop builds where the in-app store paywall is unavailable; use
+  /// [canPresentNativePaywall] for RevenueCat UI.
+  bool get isAvailable =>
+      _forceBusinessPro ||
+      _configured ||
+      (BusinessFeaturesConfig.isEnabled && isDesktopWithoutStoreSdk);
   bool get isConfigured => _configured;
   bool get hasActiveEntitlement => _forceBusinessPro || entitlement?.isActive == true;
   bool get supportsBilling => _forceBusinessPro || _supportsRevenueCat;
+
+  /// Windows / macOS / Linux: no Play Billing or App Store in this app build.
+  bool get isDesktopWithoutStoreSdk =>
+      !kIsWeb &&
+      defaultTargetPlatform != TargetPlatform.android &&
+      defaultTargetPlatform != TargetPlatform.iOS;
+
+  /// Mobile build with RevenueCat configured (can show paywall / restore).
+  bool get canPresentNativePaywall => _configured;
   String? get lastError => _configurationError;
   CustomerInfo? get customerInfo => _customerInfo;
   Offerings? get offerings => _offerings;
@@ -272,6 +287,9 @@ class BusinessEntitlementService extends ChangeNotifier {
       return PaywallResult.notPresented;
     }
     if (!_configured) {
+      if (isDesktopWithoutStoreSdk) {
+        return PaywallResult.notPresented;
+      }
       throw StateError(
         _configurationError ?? 'RevenueCat billing is not configured.',
       );

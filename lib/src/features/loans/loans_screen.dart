@@ -2,21 +2,33 @@ import 'package:flutter/material.dart';
 
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
+import '../../core/finance/projected_cash_flow.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/searchable_id_picker_sheet.dart';
 import '../../data/app_repository.dart';
 
 class LoansScreen extends StatefulWidget {
-  const LoansScreen({super.key, required this.repository});
+  const LoansScreen({
+    super.key,
+    required this.repository,
+    this.embedInSavingsLoansHub = false,
+  });
 
   final AppRepository repository;
 
+  /// When true, only the scrollable body is built (no [Scaffold] / FAB). Used by the combined savings & loans hub.
+  final bool embedInSavingsLoansHub;
+
   @override
-  State<LoansScreen> createState() => _LoansScreenState();
+  State<LoansScreen> createState() => LoansScreenState();
 }
 
-class _LoansScreenState extends State<LoansScreen> {
+class LoansScreenState extends State<LoansScreen> {
+  /// Opens the same flow as the FAB (for host scaffolds that own the FAB).
+  void createLoan() => _createLoan();
+
   late Future<_LoansViewData> _future;
   String _currencyCode = 'USD';
   final _searchController = TextEditingController();
@@ -33,6 +45,19 @@ class _LoansScreenState extends State<LoansScreen> {
   double _loanPaid(Map<String, dynamic> loan, Map<String, double> paidByLoan) {
     final id = loan['id']?.toString() ?? '';
     return paidByLoan[id] ?? 0;
+  }
+
+  static List<Map<String, dynamic>> _dedupeAccountsById(
+      List<Map<String, dynamic>> rows) {
+    final seen = <String>{};
+    final out = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final id = row['id']?.toString();
+      if (id == null || id.isEmpty || seen.contains(id)) continue;
+      seen.add(id);
+      out.add(row);
+    }
+    return out;
   }
 
   double _loanRemaining(
@@ -105,33 +130,39 @@ class _LoansScreenState extends State<LoansScreen> {
           .compareTo((b['person_name'] ?? '').toString().toLowerCase());
     }
 
-    switch (_sortLoans) {
-      case 'remaining_desc':
-        out.sort((a, b) => _loanRemaining(b, paidByLoan)
-            .compareTo(_loanRemaining(a, paidByLoan)));
-        break;
-      case 'remaining_asc':
-        out.sort((a, b) => _loanRemaining(a, paidByLoan)
-            .compareTo(_loanRemaining(b, paidByLoan)));
-        break;
-      case 'total_desc':
-        out.sort((a, b) {
+    int compareBySelectedSort(Map<String, dynamic> a, Map<String, dynamic> b) {
+      switch (_sortLoans) {
+        case 'remaining_desc':
+          return _loanRemaining(b, paidByLoan)
+              .compareTo(_loanRemaining(a, paidByLoan));
+        case 'remaining_asc':
+          return _loanRemaining(a, paidByLoan)
+              .compareTo(_loanRemaining(b, paidByLoan));
+        case 'total_desc':
           final ta = ((a['total_amount'] as num?) ?? 0).toDouble();
           final tb = ((b['total_amount'] as num?) ?? 0).toDouble();
           return tb.compareTo(ta);
-        });
-        break;
-      case 'total_asc':
-        out.sort((a, b) {
+        case 'total_asc':
           final ta = ((a['total_amount'] as num?) ?? 0).toDouble();
           final tb = ((b['total_amount'] as num?) ?? 0).toDouble();
           return ta.compareTo(tb);
-        });
-        break;
-      case 'name':
-      default:
-        out.sort(byName);
-        break;
+        case 'name':
+        default:
+          return byName(a, b);
+      }
+    }
+
+    if (_statusFilter == 'all') {
+      out.sort((a, b) {
+        final aDone = _loanRemaining(a, paidByLoan) <= 0;
+        final bDone = _loanRemaining(b, paidByLoan) <= 0;
+        if (aDone != bDone) {
+          return aDone ? 1 : -1;
+        }
+        return compareBySelectedSort(a, b);
+      });
+    } else {
+      out.sort(compareBySelectedSort);
     }
     return out;
   }
@@ -165,7 +196,8 @@ class _LoansScreenState extends State<LoansScreen> {
           ),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
-            value: _statusFilter,
+            key: ValueKey('loan-status-$_statusFilter'),
+            initialValue: _statusFilter,
             items: const [
               DropdownMenuItem(value: 'all', child: Text('All statuses')),
               DropdownMenuItem(value: 'active', child: Text('Active only')),
@@ -182,7 +214,8 @@ class _LoansScreenState extends State<LoansScreen> {
           ),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
-            value: _sortLoans,
+            key: ValueKey('loan-sort-$_sortLoans'),
+            initialValue: _sortLoans,
             items: const [
               DropdownMenuItem(value: 'name', child: Text('Name (A–Z)')),
               DropdownMenuItem(
@@ -302,6 +335,80 @@ class _LoansScreenState extends State<LoansScreen> {
     });
   }
 
+  Future<void> _openPayoffPlanner(
+    Map<String, dynamic> loan,
+    Map<String, double> paidByLoan,
+  ) async {
+    final loanId = loan['id']?.toString() ?? '';
+    final total = ((loan['total_amount'] as num?) ?? 0).toDouble();
+    final paid = paidByLoan[loanId] ?? 0;
+    final remaining = (total - paid).clamp(0.0, double.infinity);
+    final currency = (loan['currency_code'] ?? _currencyCode).toString();
+    final controller =
+        TextEditingController(text: remaining > 0 ? '50' : '0');
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setInner) {
+          final extra = double.tryParse(controller.text.replaceAll(',', '')) ?? 0;
+          final months = extra > 0
+              ? LoanPayoffEstimator.monthsToPayOff(
+                  remainingPrincipal: remaining,
+                  monthlyExtra: extra,
+                )
+              : null;
+          return AppAlertDialog(
+            title: const Text('Payoff planner'),
+            content: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Remaining: ${formatMoney(remaining, currencyCode: currency)}',
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Principal only — this app does not store APR/interest. '
+                    'Months shown assume fixed payments toward the balance.',
+                    style: TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: controller,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) => setInner(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Extra payment per month',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (remaining <= 0)
+                    const Text('Already paid off.')
+                  else if (months != null)
+                    Text(
+                      'About $months month${months == 1 ? '' : 's'} at this pace.',
+                    )
+                  else
+                    const Text('Enter an amount greater than zero.'),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    controller.dispose();
+  }
+
   Future<_LoansViewData> _loadData() async {
     final loans = await widget.repository.fetchLoans();
     final payments = await widget.repository.fetchLoanPayments();
@@ -309,8 +416,13 @@ class _LoansScreenState extends State<LoansScreen> {
     for (final p in payments) {
       final loanId = p['loan_id']?.toString() ?? '';
       if (loanId.isEmpty) continue;
-      final amount = ((p['amount'] as num?) ?? 0).toDouble();
+      final raw = ((p['amount'] as num?) ?? 0).toDouble();
+      final amount = (raw * 100).round() / 100;
       paidByLoan[loanId] = (paidByLoan[loanId] ?? 0) + amount;
+    }
+    for (final id in paidByLoan.keys.toList()) {
+      final v = paidByLoan[id] ?? 0;
+      paidByLoan[id] = (v * 100).round() / 100;
     }
     return _LoansViewData(loans: loans, paidByLoan: paidByLoan);
   }
@@ -364,7 +476,7 @@ class _LoansScreenState extends State<LoansScreen> {
         builder: (context, setInnerState) {
           final matching = matchingFor(currencyCode);
 
-          return AlertDialog(
+          return AppAlertDialog(
             title: const Text('Add Loan'),
             content: SingleChildScrollView(
               child: Column(
@@ -391,8 +503,10 @@ class _LoansScreenState extends State<LoansScreen> {
                           icon: Icon(Icons.arrow_upward)),
                     ],
                     selected: {direction},
-                    onSelectionChanged: (v) =>
-                        setInnerState(() => direction = v.first),
+                    onSelectionChanged: (v) => setInnerState(() {
+                      direction = v.first;
+                      loanTotalAmountError = null;
+                    }),
                   ),
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -435,7 +549,10 @@ class _LoansScreenState extends State<LoansScreen> {
                         matches: (v, q) => v.toLowerCase().contains(q),
                       );
                       if (code != null) {
-                        setInnerState(() => amountInputCurrency = code);
+                        setInnerState(() {
+                          amountInputCurrency = code;
+                          loanTotalAmountError = null;
+                        });
                       }
                     },
                   ),
@@ -458,6 +575,7 @@ class _LoansScreenState extends State<LoansScreen> {
                         setInnerState(() {
                           currencyCode = v;
                           amountInputCurrency = v;
+                          loanTotalAmountError = null;
                           final m = matchingFor(v);
                           if (m.isEmpty) {
                             return;
@@ -524,7 +642,10 @@ class _LoansScreenState extends State<LoansScreen> {
                           },
                         );
                         if (id != null) {
-                          setInnerState(() => selectedPrincipalAccountId = id);
+                          setInnerState(() {
+                            selectedPrincipalAccountId = id;
+                            loanTotalAmountError = null;
+                          });
                         }
                       },
                     ),
@@ -566,7 +687,7 @@ class _LoansScreenState extends State<LoansScreen> {
               FilledButton(
                 onPressed: matching.isEmpty
                     ? null
-                    : () {
+                    : () async {
                         final trimmed = totalAmount.text.trim();
                         if (trimmed.isEmpty) {
                           setInnerState(() =>
@@ -585,6 +706,48 @@ class _LoansScreenState extends State<LoansScreen> {
                           return;
                         }
                         setInnerState(() => loanTotalAmountError = null);
+
+                        final sid = matching.any((a) =>
+                                a['id']?.toString() ==
+                                selectedPrincipalAccountId)
+                            ? selectedPrincipalAccountId
+                            : matching.first['id']!.toString();
+
+                        if (direction == 'owed_to_me') {
+                          Map<String, dynamic>? accRow;
+                          for (final a in matching) {
+                            if (a['id']?.toString() == sid) {
+                              accRow = a;
+                              break;
+                            }
+                          }
+                          final bal = accRow == null
+                              ? 0.0
+                              : ((accRow['current_balance'] as num?) ?? 0)
+                                  .toDouble();
+                          double inLoanCurrency;
+                          try {
+                            inLoanCurrency = await widget.repository
+                                .convertAmountBetweenCurrencies(
+                              amount: parsed,
+                              fromCurrency: amountInputCurrency,
+                              toCurrency: currencyCode,
+                            );
+                          } catch (_) {
+                            if (!context.mounted) return;
+                            setInnerState(() => loanTotalAmountError =
+                                'Could not convert this amount. Check exchange rates.');
+                            return;
+                          }
+                          if (!context.mounted) return;
+                          if (inLoanCurrency > bal + 1e-9) {
+                            setInnerState(() => loanTotalAmountError =
+                                'This amount (${formatMoney(inLoanCurrency, currencyCode: currencyCode)}) is larger than this account\'s balance (${formatMoney(bal, currencyCode: currencyCode)}). Lower the loan total or pick another account.');
+                            return;
+                          }
+                        }
+
+                        if (!context.mounted) return;
                         Navigator.pop(context, true);
                       },
                 child: const Text('Save'),
@@ -626,6 +789,30 @@ class _LoansScreenState extends State<LoansScreen> {
           );
           return;
         }
+        if (direction == 'owed_to_me') {
+          final freshAccounts =
+              await widget.repository.fetchAccounts(forceRefresh: true);
+          if (!mounted) return;
+          double? balance;
+          for (final a in freshAccounts) {
+            if (a['id']?.toString() == principalId) {
+              balance =
+                  ((a['current_balance'] as num?) ?? 0).toDouble();
+              break;
+            }
+          }
+          if (balance != null &&
+              totalInLoanCurrency > balance + 1e-9) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'This amount (${formatMoney(totalInLoanCurrency, currencyCode: currencyCode)}) is larger than the account balance (${formatMoney(balance, currencyCode: currencyCode)}). Lower the loan total or pick another account before saving.',
+                ),
+              ),
+            );
+            return;
+          }
+        }
         await widget.repository.createLoan(
           personName: personName.text.trim(),
           totalAmount: totalInLoanCurrency,
@@ -650,7 +837,8 @@ class _LoansScreenState extends State<LoansScreen> {
 
   Future<void> _addPayment(
       Map<String, dynamic> loan, double alreadyPaid) async {
-    final accountsAll = await widget.repository.fetchAccounts();
+    final accountsAll =
+        _dedupeAccountsById(await widget.repository.fetchAccounts());
     if (!mounted) return;
     if (accountsAll.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -669,31 +857,19 @@ class _LoansScreenState extends State<LoansScreen> {
     }
     final currency =
         (loan['currency_code'] ?? _currencyCode).toString().toUpperCase();
-    final accounts = accountsAll
-        .where((e) =>
-            (e['currency_code'] ?? '').toString().toUpperCase() == currency)
-        .toList();
-    if (accounts.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Create an account in $currency to record payments on this loan.',
-          ),
-        ),
-      );
-      return;
-    }
+    final accounts = accountsAll;
     final direction = (loan['direction'] ?? 'owed_to_me').toString();
     String selectedAccountId = accounts.first['id'].toString();
     final amountController = TextEditingController();
     final noteController = TextEditingController();
     DateTime paymentDate = DateTime.now();
-    var paymentInputCurrency = currency;
+    var paymentInputCurrency =
+        (accounts.first['currency_code'] ?? currency).toString().toUpperCase();
 
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: Text('Record payment • ${loan['person_name'] ?? ''}'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -719,7 +895,18 @@ class _LoansScreenState extends State<LoansScreen> {
                         (row['name'] ?? '').toString().toLowerCase().contains(q),
                   );
                   if (id != null) {
-                    setInnerState(() => selectedAccountId = id);
+                    setInnerState(() {
+                      selectedAccountId = id;
+                      for (final a in accounts) {
+                        if (a['id']?.toString() == id) {
+                          paymentInputCurrency =
+                              (a['currency_code'] ?? currency)
+                                  .toString()
+                                  .toUpperCase();
+                          break;
+                        }
+                      }
+                    });
                   }
                 },
               ),
@@ -739,7 +926,8 @@ class _LoansScreenState extends State<LoansScreen> {
               _loanSearchableCurrencyRow(
                 context: context,
                 label: 'Amount is in',
-                helperText: 'Converted to loan currency before saving',
+                helperText:
+                    'Converted to loan currency for the payment record; your account is updated in its own currency',
                 selectedCode: paymentInputCurrency,
                 onPick: () async {
                   final code = await showSearchableStringPickerSheet(
@@ -821,6 +1009,23 @@ class _LoansScreenState extends State<LoansScreen> {
           );
           return;
         }
+        Map<String, dynamic>? selectedAccountRow;
+        for (final a in accounts) {
+          if (a['id']?.toString() == selectedAccountId) {
+            selectedAccountRow = a;
+            break;
+          }
+        }
+        final accountCur = (selectedAccountRow?['currency_code'] ?? currency)
+            .toString()
+            .toUpperCase();
+        final double? accountTxAmount = accountCur == currency
+            ? null
+            : await widget.repository.convertAmountBetweenCurrencies(
+                amount: amountInLoanCurrency,
+                fromCurrency: currency,
+                toCurrency: accountCur,
+              );
         await widget.repository.addLoanPayment(
           loanId: loanId,
           amount: amountInLoanCurrency,
@@ -829,6 +1034,7 @@ class _LoansScreenState extends State<LoansScreen> {
           note: noteController.text.trim().isEmpty
               ? null
               : noteController.text.trim(),
+          accountTransactionAmount: accountTxAmount,
         );
         _reload();
         if (!mounted) return;
@@ -840,6 +1046,304 @@ class _LoansScreenState extends State<LoansScreen> {
           SnackBar(content: Text(friendlyErrorMessage(e))),
         );
       }
+    }
+  }
+
+  /// Undo a **recorded** payment (the amount you marked paid/received), not the
+  /// remaining loan balance. Reverses the linked account transaction.
+  Future<void> _reverseRecordedLoanPayment(
+      Map<String, dynamic> loan, double alreadyPaid) async {
+    if (alreadyPaid <= 1e-9) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No recorded payments to reverse yet.'),
+        ),
+      );
+      return;
+    }
+    final loanId = loan['id']?.toString() ?? '';
+    if (loanId.isEmpty) return;
+    final currency =
+        (loan['currency_code'] ?? _currencyCode).toString().toUpperCase();
+    final direction = (loan['direction'] ?? 'owed_to_me').toString();
+    final payments = await widget.repository.fetchLoanPayments();
+    final forLoan = payments
+        .where((p) => p['loan_id']?.toString() == loanId)
+        .where((p) {
+          final id = p['id']?.toString() ?? '';
+          return id.isNotEmpty && !id.startsWith('local-');
+        })
+        .toList();
+    forLoan.sort((a, b) {
+      final da = DateTime.tryParse((a['payment_date'] ?? '').toString()) ??
+          DateTime.tryParse((a['created_at'] ?? '').toString());
+      final db = DateTime.tryParse((b['payment_date'] ?? '').toString()) ??
+          DateTime.tryParse((b['created_at'] ?? '').toString());
+      if (da == null && db == null) return 0;
+      if (da == null) return 1;
+      if (db == null) return -1;
+      return db.compareTo(da);
+    });
+    if (!mounted) return;
+    if (forLoan.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No synced payments to reverse. Wait for sync if you recorded one offline.',
+          ),
+        ),
+      );
+      return;
+    }
+    final accountsAll =
+        _dedupeAccountsById(await widget.repository.fetchAccounts());
+    if (!mounted) return;
+    final accountNameById = <String, String>{
+      for (final a in accountsAll)
+        if (a['id'] != null)
+          a['id'].toString(): (a['name'] ?? 'Account').toString(),
+    };
+    var selectedId = forLoan.first['id']?.toString();
+    final mq = MediaQuery.of(context);
+    final maxListHeight = (mq.size.height * 0.4).clamp(160.0, 320.0);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setInnerState) {
+          return AppAlertDialog(
+            title: Text('Reverse payment • ${loan['person_name'] ?? ''}'),
+            content: SizedBox(
+              width: 380,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    direction == 'owed_to_me'
+                        ? 'Pick a payment you recorded (money you marked as received). This removes that payment from the loan and withdraws the same amount from the account it was posted to.'
+                        : 'Pick a payment you recorded (money you marked as sent). This removes that payment from the loan and credits the same amount back to the account it was paid from.',
+                    style: TextStyle(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: 0.72),
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: maxListHeight),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      physics: const ClampingScrollPhysics(),
+                      itemCount: forLoan.length,
+                      itemBuilder: (_, i) {
+                        final p = forLoan[i];
+                        final id = p['id']?.toString() ?? '';
+                        final amt = ((p['amount'] as num?) ?? 0).toDouble();
+                        final accId = p['account_id']?.toString() ?? '';
+                        final accLabel = accountNameById[accId] ?? 'Account';
+                        final rawDate =
+                            (p['payment_date'] ?? '').toString().split('T').first;
+                        final note = (p['note'] ?? '').toString().trim();
+                        final isSel = selectedId == id;
+                        return ListTile(
+                          dense: true,
+                          selected: isSel,
+                          onTap: () => setInnerState(() => selectedId = id),
+                          leading: Icon(
+                            isSel
+                                ? Icons.radio_button_checked
+                                : Icons.radio_button_unchecked,
+                          ),
+                          title: Text(
+                            formatMoney(amt, currencyCode: currency),
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: Text(
+                            '$accLabel • $rawDate'
+                            '${note.isNotEmpty ? '\n$note' : ''}',
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: selectedId == null
+                    ? null
+                    : () => Navigator.pop(dialogContext, true),
+                child: const Text('Reverse payment'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (ok != true || selectedId == null) return;
+    final paymentId = selectedId!;
+
+    try {
+      await widget.repository.reverseLoanPayment(loanPaymentId: paymentId);
+      _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Payment reversed')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(e))),
+      );
+    }
+  }
+
+  Future<void> _addToLoan(
+      Map<String, dynamic> loan, double alreadyPaid) async {
+    final loanId = loan['id']?.toString() ?? '';
+    if (loanId.isEmpty) return;
+    final currency =
+        (loan['currency_code'] ?? _currencyCode).toString().toUpperCase();
+    final currentTotal = ((loan['total_amount'] as num?) ?? 0).toDouble();
+    final person = (loan['person_name'] ?? '').toString();
+    final direction = (loan['direction'] ?? 'owed_to_me').toString();
+    final rawNote = (loan['note'] ?? '').toString().trim();
+    final noteOrNull = rawNote.isEmpty ? null : rawNote;
+    DateTime? dueDate =
+        DateTime.tryParse((loan['due_date'] ?? '').toString());
+
+    final amountController = TextEditingController();
+    var addInputCurrency = currency;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setInnerState) => AppAlertDialog(
+          title: Text('Add to loan • $person'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                direction == 'owed_to_me'
+                    ? 'Increases how much they owe you. Your principal account is adjusted like when you edit the total.'
+                    : 'Increases how much you owe. Your principal account is adjusted like when you edit the total.',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface.withValues(
+                        alpha: 0.7,
+                      ),
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: amountController,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [AmountInputFormatter()],
+                decoration: InputDecoration(
+                  labelText: 'Amount to add',
+                  hintText:
+                      'Current total: ${formatMoney(currentTotal, currencyCode: currency)}',
+                ),
+              ),
+              const SizedBox(height: 8),
+              _loanSearchableCurrencyRow(
+                context: context,
+                label: 'Amount is in',
+                helperText: 'Converted to loan currency ($currency)',
+                selectedCode: addInputCurrency,
+                onPick: () async {
+                  final code = await showSearchableStringPickerSheet(
+                    context,
+                    title: 'Amount currency',
+                    searchHint: 'Search code (e.g. EUR)',
+                    values: supportedCurrencyCodes,
+                    selected: addInputCurrency,
+                    matches: (v, q) => v.toLowerCase().contains(q),
+                  );
+                  if (code != null) {
+                    setInnerState(() => addInputCurrency = code);
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final addParsed = parseFormattedAmount(amountController.text);
+    if (ok != true || addParsed == null || addParsed <= 0) return;
+
+    try {
+      final addInLoanCurrency =
+          await widget.repository.convertAmountBetweenCurrencies(
+        amount: addParsed,
+        fromCurrency: addInputCurrency,
+        toCurrency: currency,
+      );
+      if (addInLoanCurrency <= 0) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Converted amount must be greater than zero.'),
+          ),
+        );
+        return;
+      }
+      final newTotal = currentTotal + addInLoanCurrency;
+      if (newTotal < alreadyPaid) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'New total would be below amount already paid (${formatMoney(alreadyPaid, currencyCode: currency)}).',
+            ),
+          ),
+        );
+        return;
+      }
+      await widget.repository.updateLoan(
+        loanId: loanId,
+        personName: person,
+        totalAmount: newTotal,
+        direction: direction,
+        currencyCode: currency,
+        note: noteOrNull,
+        dueDate: dueDate,
+      );
+      _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Loan total updated')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(e))),
+      );
     }
   }
 
@@ -862,7 +1366,7 @@ class _LoansScreenState extends State<LoansScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setInnerState) => AlertDialog(
+        builder: (context, setInnerState) => AppAlertDialog(
           title: const Text('Edit Loan'),
           content: SingleChildScrollView(
             child: Column(
@@ -1035,7 +1539,7 @@ class _LoansScreenState extends State<LoansScreen> {
   Future<void> _deleteLoan(Map<String, dynamic> loan) async {
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => AppAlertDialog(
         title: const Text('Delete loan?'),
         content: Text(
           'Remove "${loan['person_name'] ?? ''}" (${formatMoney((loan['total_amount'] as num?) ?? 0, currencyCode: (loan['currency_code'] ?? 'USD').toString())})? Payment history will be deleted.',
@@ -1069,157 +1573,182 @@ class _LoansScreenState extends State<LoansScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: AppPageScaffold(
-        child: RefreshIndicator(
-          onRefresh: _reload,
-          child: FutureBuilder<_LoansViewData>(
-            future: _future,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (snapshot.hasError) {
-                return ListView(
-                  children: [
-                    const SizedBox(height: 120),
-                    Center(child: Text(friendlyErrorMessage(snapshot.error))),
-                  ],
-                );
-              }
-              final data = snapshot.data;
-              final loans = data?.loans ?? [];
-              final paidByLoan = data?.paidByLoan ?? <String, double>{};
-
-              final filtered = _filteredSortedLoans(loans, paidByLoan);
-              final owedToMe = filtered
-                  .where((l) => (l['direction'] ?? '') == 'owed_to_me')
-                  .toList();
-              final owedByMe = filtered
-                  .where((l) => (l['direction'] ?? '') == 'owed_by_me')
-                  .toList();
-
-              if (loans.isEmpty) {
-                return ListView(
-                  children: [
-                    const SizedBox(height: 80),
-                    const Icon(Icons.people_outline,
-                        size: 64, color: Colors.white38),
-                    const SizedBox(height: 16),
-                    const Center(child: Text('No loans yet')),
-                    const SizedBox(height: 8),
-                    Center(
-                      child: Text(
-                        'Track money people owe you, or that you owe others.',
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.copyWith(color: Colors.white70),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ],
-                );
-              }
-
-              if (filtered.isEmpty) {
-                return ListView(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 100),
-                  children: [
-                    _loansFilterChrome(context),
-                    const SizedBox(height: 48),
-                    const Center(
-                      child: Text('No loans match your search or filters'),
-                    ),
-                  ],
-                );
-              }
-
+    final bottomPad = widget.embedInSavingsLoansHub ? 88.0 : 100.0;
+    final body = AppPageScaffold(
+      child: RefreshIndicator(
+        onRefresh: _reload,
+        child: FutureBuilder<_LoansViewData>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
               return ListView(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 100),
                 children: [
-                  _loansFilterChrome(context),
-                  if (owedToMe.isNotEmpty) ...[
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 8),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.arrow_downward,
-                              color: Color(0xFF4CAF50), size: 20),
-                          const SizedBox(width: 8),
-                          Text(
-                            'They owe me',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(
-                                  color: const Color(0xFF4CAF50),
-                                  fontWeight: FontWeight.w600,
-                                ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    ...owedToMe.map((loan) => _LoanCard(
-                          loan: loan,
-                          paidByLoan: paidByLoan,
-                          currencyCode: _currencyCode,
-                          onAddPayment: () => _addPayment(
-                            loan,
-                            paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
-                          ),
-                          onEdit: () => _editLoan(
-                            loan,
-                            paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
-                          ),
-                          onDelete: () => _deleteLoan(loan),
-                        )),
-                    const SizedBox(height: 16),
-                  ],
-                  if (owedByMe.isNotEmpty) ...[
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 8),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.arrow_upward,
-                              color: Color(0xFFE57373), size: 20),
-                          const SizedBox(width: 8),
-                          Text(
-                            'I owe them',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(
-                                  color: const Color(0xFFE57373),
-                                  fontWeight: FontWeight.w600,
-                                ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    ...owedByMe.map((loan) => _LoanCard(
-                          loan: loan,
-                          paidByLoan: paidByLoan,
-                          currencyCode: _currencyCode,
-                          onAddPayment: () => _addPayment(
-                            loan,
-                            paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
-                          ),
-                          onEdit: () => _editLoan(
-                            loan,
-                            paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
-                          ),
-                          onDelete: () => _deleteLoan(loan),
-                        )),
-                  ],
+                  const SizedBox(height: 120),
+                  Center(child: Text(friendlyErrorMessage(snapshot.error))),
                 ],
               );
-            },
-          ),
+            }
+            final data = snapshot.data;
+            final loans = data?.loans ?? [];
+            final paidByLoan = data?.paidByLoan ?? <String, double>{};
+
+            final filtered = _filteredSortedLoans(loans, paidByLoan);
+            final owedToMe = filtered
+                .where((l) => (l['direction'] ?? '') == 'owed_to_me')
+                .toList();
+            final owedByMe = filtered
+                .where((l) => (l['direction'] ?? '') == 'owed_by_me')
+                .toList();
+
+            if (loans.isEmpty) {
+              return ListView(
+                children: [
+                  const SizedBox(height: 80),
+                  const Icon(Icons.people_outline,
+                      size: 64, color: Colors.white38),
+                  const SizedBox(height: 16),
+                  const Center(child: Text('No loans yet')),
+                  const SizedBox(height: 8),
+                  Center(
+                    child: Text(
+                      'Track money people owe you, or that you owe others.',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyMedium
+                          ?.copyWith(color: Colors.white70),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            if (filtered.isEmpty) {
+              return ListView(
+                padding: EdgeInsets.fromLTRB(12, 0, 12, bottomPad),
+                children: [
+                  _loansFilterChrome(context),
+                  const SizedBox(height: 48),
+                  const Center(
+                    child: Text('No loans match your search or filters'),
+                  ),
+                ],
+              );
+            }
+
+            return ListView(
+              padding: EdgeInsets.fromLTRB(12, 0, 12, bottomPad),
+              children: [
+                _loansFilterChrome(context),
+                if (owedToMe.isNotEmpty) ...[
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.arrow_downward,
+                            color: Color(0xFF4CAF50), size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'They owe me',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(
+                                color: const Color(0xFF4CAF50),
+                                fontWeight: FontWeight.w600,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  ...owedToMe.map((loan) => _LoanCard(
+                        loan: loan,
+                        paidByLoan: paidByLoan,
+                        currencyCode: _currencyCode,
+                        onAddPayment: () => _addPayment(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
+                        onAddToLoan: () => _addToLoan(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
+                        onRefundToAccount: () => _reverseRecordedLoanPayment(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
+                        onEdit: () => _editLoan(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
+                        onDelete: () => _deleteLoan(loan),
+                        onPayoffPlanner: null,
+                      )),
+                  const SizedBox(height: 16),
+                ],
+                if (owedByMe.isNotEmpty) ...[
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.arrow_upward,
+                            color: Color(0xFFE57373), size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'I owe them',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(
+                                color: const Color(0xFFE57373),
+                                fontWeight: FontWeight.w600,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  ...owedByMe.map((loan) => _LoanCard(
+                        loan: loan,
+                        paidByLoan: paidByLoan,
+                        currencyCode: _currencyCode,
+                        onAddPayment: () => _addPayment(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
+                        onAddToLoan: () => _addToLoan(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
+                        onRefundToAccount: () => _reverseRecordedLoanPayment(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
+                        onEdit: () => _editLoan(
+                          loan,
+                          paidByLoan[loan['id']?.toString() ?? ''] ?? 0,
+                        ),
+                        onDelete: () => _deleteLoan(loan),
+                        onPayoffPlanner: () =>
+                            _openPayoffPlanner(loan, paidByLoan),
+                      )),
+                ],
+              ],
+            );
+          },
         ),
       ),
+    );
+
+    if (widget.embedInSavingsLoansHub) {
+      return body;
+    }
+    return Scaffold(
+      body: body,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createLoan,
         icon: const Icon(Icons.add),
@@ -1235,16 +1764,22 @@ class _LoanCard extends StatelessWidget {
     required this.paidByLoan,
     required this.currencyCode,
     required this.onAddPayment,
+    required this.onAddToLoan,
+    required this.onRefundToAccount,
     required this.onEdit,
     required this.onDelete,
+    required this.onPayoffPlanner,
   });
 
   final Map<String, dynamic> loan;
   final Map<String, double> paidByLoan;
   final String currencyCode;
   final VoidCallback onAddPayment;
+  final VoidCallback onAddToLoan;
+  final VoidCallback onRefundToAccount;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final VoidCallback? onPayoffPlanner;
 
   @override
   Widget build(BuildContext context) {
@@ -1282,13 +1817,23 @@ class _LoanCard extends StatelessWidget {
                     icon: const Icon(Icons.more_vert),
                     onSelected: (value) {
                       if (value == 'edit') onEdit();
+                      if (value == 'refund') onRefundToAccount();
                       if (value == 'delete') onDelete();
                     },
                     itemBuilder: (_) => [
                       const PopupMenuItem(
-                          value: 'edit', child: Text('Edit loan')),
+                        value: 'edit',
+                        child: Text('Edit loan'),
+                      ),
+                      PopupMenuItem(
+                        value: 'refund',
+                        enabled: paid > 1e-9,
+                        child: const Text('Reverse a payment…'),
+                      ),
                       const PopupMenuItem(
-                          value: 'delete', child: Text('Delete loan')),
+                        value: 'delete',
+                        child: Text('Delete loan'),
+                      ),
                     ],
                   ),
                 ],
@@ -1336,10 +1881,29 @@ class _LoanCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              TextButton.icon(
-                onPressed: isPaidOff ? null : onAddPayment,
-                icon: const Icon(Icons.add, size: 18),
-                label: Text(isPaidOff ? 'Paid off' : 'Record payment'),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: isPaidOff ? null : onAddPayment,
+                      icon: const Icon(Icons.payments_outlined, size: 18),
+                      label: Text(isPaidOff ? 'Paid off' : 'Record payment'),
+                    ),
+                  ),
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: onAddToLoan,
+                      icon: const Icon(Icons.add_chart, size: 18),
+                      label: const Text('Add to loan'),
+                    ),
+                  ),
+                  if (onPayoffPlanner != null && !isPaidOff)
+                    TextButton.icon(
+                      onPressed: onPayoffPlanner,
+                      icon: const Icon(Icons.calculate_outlined, size: 18),
+                      label: const Text('Plan'),
+                    ),
+                ],
               ),
             ],
           ),

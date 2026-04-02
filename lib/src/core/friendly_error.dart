@@ -57,6 +57,9 @@ String friendlyErrorMessage(Object? error) {
     if (msg.contains('savings goal not found')) {
       return 'Savings goal was not found. Please refresh and try again.';
     }
+    if (msg.contains('loan payment not found')) {
+      return 'That payment was not found. Refresh the list and try again.';
+    }
     if (msg.contains('infinite recursion detected in policy')) {
       return 'Workspace permissions are misconfigured in Supabase. Apply the latest workspace migration.';
     }
@@ -89,6 +92,15 @@ String friendlyErrorMessage(Object? error) {
 
   if (error is SocketException) {
     return 'No internet connection. Please check your network and try again.';
+  }
+
+  if (error is Exception) {
+    final s = error.toString();
+    const prefix = 'Exception: ';
+    if (s.startsWith(prefix)) {
+      final inner = s.substring(prefix.length).trim();
+      if (inner.isNotEmpty) return inner;
+    }
   }
 
   return 'Something went wrong. Please try again.';

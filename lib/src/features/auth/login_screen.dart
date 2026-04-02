@@ -3,6 +3,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import '../../data/app_repository.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/animated_appear.dart';
 import '../../core/ui/glass_panel.dart';
 
@@ -80,7 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final controller = TextEditingController(text: _emailController.text.trim());
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => AppAlertDialog(
         title: const Text('Reset Password'),
         content: TextField(
           controller: controller,
@@ -116,7 +117,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final controller = TextEditingController(text: _emailController.text.trim());
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => AppAlertDialog(
         title: const Text('Resend Verification Email'),
         content: TextField(
           controller: controller,

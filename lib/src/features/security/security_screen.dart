@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/security/app_lock_service.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/glass_panel.dart';
 
@@ -36,7 +37,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
     final c2 = TextEditingController();
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => AppAlertDialog(
         title: const Text('Set Passcode'),
         content: Column(
           mainAxisSize: MainAxisSize.min,

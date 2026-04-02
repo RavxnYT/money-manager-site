@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../../core/categories/category_icon_utils.dart';
 import '../../core/currency/amount_input_formatter.dart';
 import '../../core/currency/currency_utils.dart';
+import '../../core/finance/smart_budget_suggestions.dart';
 import '../../core/friendly_error.dart';
+import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
@@ -64,6 +66,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
 
   Future<void> _addBudget() async {
     final categories = await widget.repository.fetchCategories('expense');
+    if (!mounted) return;
     if (categories.isEmpty) {
       return;
     }
@@ -86,13 +89,14 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
       context: context,
       builder: (_) => StatefulBuilder(
         builder: (context, setInnerState) {
-          return AlertDialog(
+          return AppAlertDialog(
             title: const Text('Set Monthly Budget'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 DropdownButtonFormField<String>(
-                  value: uniqueCategories
+                  key: ValueKey('budget-cat-$selectedCategoryId'),
+                  initialValue: uniqueCategories
                           .any((e) => e['id']?.toString() == selectedCategoryId)
                       ? selectedCategoryId
                       : null,
@@ -148,6 +152,109 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
       );
       _reload();
     }
+  }
+
+  Future<void> _smartBudgetFromHistory() async {
+    final suggestions = await SmartBudgetSuggestions.compute(
+      repository: widget.repository,
+      anchorMonth: _monthStart,
+    );
+    if (!mounted) return;
+    if (suggestions.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No smart suggestions yet. Log a few months of categorized expenses, '
+            'or you may already have budgets for the main categories.',
+          ),
+        ),
+      );
+      return;
+    }
+    final categories = await widget.repository.fetchCategories('expense');
+    if (!mounted) return;
+    String nameFor(String id) {
+      for (final c in categories) {
+        if (c['id']?.toString() == id) {
+          return (c['name'] ?? id).toString();
+        }
+      }
+      return id;
+    }
+
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 16,
+              bottom: MediaQuery.viewInsetsOf(ctx).bottom + 16,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Smart budget suggestions',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'From your last 3 months of spending with a small buffer. '
+                  'Only categories without a budget this month are listed.',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.7),
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: MediaQuery.sizeOf(ctx).height * 0.45,
+                  child: ListView.builder(
+                    itemCount: suggestions.length,
+                    itemBuilder: (_, i) {
+                      final s = suggestions[i];
+                      return Card(
+                        color: Colors.white.withValues(alpha: 0.06),
+                        child: ListTile(
+                          title: Text(nameFor(s.categoryId)),
+                          subtitle: Text(
+                            'Recent avg ${formatMoney(s.trailingAverageMonthly, currencyCode: _currencyCode)} · '
+                            'suggested cap ${formatMoney(s.suggestedMonthlyLimit, currencyCode: _currencyCode)}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          trailing: FilledButton.tonal(
+                            onPressed: () async {
+                              await widget.repository.upsertBudget(
+                                categoryId: s.categoryId,
+                                monthStart: _monthStart,
+                                amountLimit: s.suggestedMonthlyLimit,
+                              );
+                              if (ctx.mounted) Navigator.pop(ctx);
+                              _reload();
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Budget applied')),
+                              );
+                            },
+                            child: const Text('Apply'),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -248,10 +355,24 @@ class _BudgetsScreenState extends State<BudgetsScreen> {
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addBudget,
-        label: const Text('Add'),
-        icon: const Icon(Icons.add),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'budget_smart_suggest',
+            onPressed: _smartBudgetFromHistory,
+            label: const Text('Suggest'),
+            icon: const Icon(Icons.auto_graph_outlined),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton.extended(
+            heroTag: 'budget_add_manual',
+            onPressed: _addBudget,
+            label: const Text('Add'),
+            icon: const Icon(Icons.add),
+          ),
+        ],
       ),
     );
   }
