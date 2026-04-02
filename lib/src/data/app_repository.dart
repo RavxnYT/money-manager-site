@@ -398,6 +398,39 @@ class AppRepository {
     return scope;
   }
 
+  /// For organization workspaces, ledger rows use [organizations.owner_user_id].
+  /// Callers querying `accounts`, `transactions`, etc. must filter by this id, not [currentUser].
+  Future<String> workspaceLedgerUserId() async {
+    final user = currentUser;
+    if (user == null) {
+      throw StateError('Not signed in');
+    }
+    final scope = await _activeWorkspaceScope();
+    if (scope.organizationId == null) {
+      return user.id;
+    }
+    final workspaces = await fetchWorkspaces();
+    for (final row in workspaces) {
+      if (row['organization_id']?.toString() == scope.organizationId) {
+        final owner = row['owner_user_id']?.toString();
+        if (owner != null && owner.isNotEmpty) {
+          return owner;
+        }
+        break;
+      }
+    }
+    final orgRow = await _client
+        .from('organizations')
+        .select('owner_user_id')
+        .eq('id', scope.organizationId!)
+        .single();
+    final owner = orgRow['owner_user_id']?.toString();
+    if (owner == null || owner.isEmpty) {
+      throw StateError('Organization owner not found');
+    }
+    return owner;
+  }
+
   dynamic _applyWorkspaceFilter(dynamic query, String? organizationId) {
     final normalized = _normalizedOrganizationId(organizationId);
     if (normalized == null) {
@@ -1578,6 +1611,7 @@ class AppRepository {
         return <String, dynamic>{
           'kind': 'organization',
           'organization_id': orgId,
+          'owner_user_id': orgMap['owner_user_id']?.toString(),
           'label': (orgMap['name'] ?? 'Organization').toString(),
           'slug': orgMap['slug']?.toString(),
           'role': (row['role'] ?? 'member').toString(),
@@ -1595,7 +1629,7 @@ class AppRepository {
       final data = await _client
           .from('organization_members')
           .select(
-            'role, sort_order, organization:organizations!organization_members_organization_id_fkey(id, name, slug, currency_code, has_selected_currency)',
+            'role, sort_order, organization:organizations!organization_members_organization_id_fkey(id, name, slug, owner_user_id, currency_code, has_selected_currency)',
           )
           .eq('user_id', user.id)
           .order('sort_order', ascending: true);
@@ -1895,10 +1929,11 @@ class AppRepository {
     final scope = await _activeWorkspaceScope();
     final key = _accountsKey(scope: scope);
     Future<List<Map<String, dynamic>>> network() async {
+      final ledgerId = await workspaceLedgerUserId();
       dynamic query = _client
           .from('accounts')
           .select()
-          .eq('user_id', user.id)
+          .eq('user_id', ledgerId)
           .eq('is_archived', false);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query.order('created_at');
@@ -1980,10 +2015,11 @@ class AppRepository {
   }) async {
     final user = currentUser;
     if (user == null) return '';
+    final ledgerId = await workspaceLedgerUserId();
     final inserted = await _client
         .from('accounts')
         .insert({
-          'user_id': user.id,
+          'user_id': ledgerId,
           'organization_id': organizationId,
           'name': name,
           'type': type,
@@ -2061,11 +2097,12 @@ class AppRepository {
     if (currentBalance != null) {
       updateData['current_balance'] = currentBalance;
     }
+    final ledgerId = await workspaceLedgerUserId();
     dynamic query = _client
         .from('accounts')
         .update(updateData)
         .eq('id', accountId)
-        .eq('user_id', user.id);
+        .eq('user_id', ledgerId);
     query = _applyWorkspaceFilter(query, organizationId);
     await query;
   }
@@ -2159,10 +2196,11 @@ class AppRepository {
     final key = _categoriesKey(type, scope: scope);
     final defaults = _defaultCategoriesFor(type);
     Future<List<Map<String, dynamic>>> network() async {
+      final ledgerId = await workspaceLedgerUserId();
       dynamic query = _client
           .from('categories')
           .select()
-          .eq('user_id', user.id)
+          .eq('user_id', ledgerId)
           .eq('type', type)
           .eq('is_archived', false);
       query = _applyWorkspaceFilter(query, scope.organizationId);
@@ -2173,7 +2211,7 @@ class AppRepository {
         dynamic refreshQuery = _client
             .from('categories')
             .select()
-            .eq('user_id', user.id)
+            .eq('user_id', ledgerId)
             .eq('type', type)
             .eq('is_archived', false);
         refreshQuery = _applyWorkspaceFilter(refreshQuery, scope.organizationId);
@@ -2276,10 +2314,11 @@ class AppRepository {
   }) async {
     final user = currentUser;
     if (user == null) return '';
+    final ledgerId = await workspaceLedgerUserId();
     final inserted = await _client
         .from('categories')
         .insert({
-          'user_id': user.id,
+          'user_id': ledgerId,
           'organization_id': organizationId,
           'name': name,
           'type': type,
@@ -2350,11 +2389,12 @@ class AppRepository {
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final ledgerId = await workspaceLedgerUserId();
     dynamic query = _client.from('categories').update({
       'name': name,
       'icon': iconKey,
       'color_hex': colorHex,
-    }).eq('id', categoryId).eq('user_id', user.id);
+    }).eq('id', categoryId).eq('user_id', ledgerId);
     query = _applyWorkspaceFilter(query, organizationId);
     await query;
   }
@@ -2408,11 +2448,12 @@ class AppRepository {
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final ledgerId = await workspaceLedgerUserId();
     dynamic query = _client
         .from('categories')
         .delete()
         .eq('id', categoryId)
-        .eq('user_id', user.id);
+        .eq('user_id', ledgerId);
     query = _applyWorkspaceFilter(query, organizationId);
     await query;
   }
@@ -2424,6 +2465,7 @@ class AppRepository {
     final scope = await _activeWorkspaceScope();
     final key = _transactionsKey(scope: scope);
     Future<List<Map<String, dynamic>>> network() async {
+      final ledgerId = await workspaceLedgerUserId();
       dynamic query = _client
           .from('transactions')
           .select(
@@ -2432,7 +2474,7 @@ class AppRepository {
             'transfer_account:accounts!transactions_transfer_account_id_fkey(name, currency_code), '
             'categories(id, name, icon, color_hex)',
           )
-          .eq('user_id', user.id);
+          .eq('user_id', ledgerId);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query
           .order('transaction_date', ascending: false)
@@ -2471,6 +2513,7 @@ class AppRepository {
     final key = _transactionsMonthCacheKey(month, scope: scope);
 
     Future<List<Map<String, dynamic>>> network() async {
+      final ledgerId = await workspaceLedgerUserId();
       dynamic query = _client
           .from('transactions')
           .select(
@@ -2479,7 +2522,7 @@ class AppRepository {
             'transfer_account:accounts!transactions_transfer_account_id_fkey(name, currency_code), '
             'categories(id, name, icon, color_hex)',
           )
-          .eq('user_id', user.id)
+          .eq('user_id', ledgerId)
           .gte('transaction_date', startDate)
           .lt('transaction_date', endDate);
       query = _applyWorkspaceFilter(query, scope.organizationId);
@@ -2545,6 +2588,7 @@ class AppRepository {
         .add(const Duration(days: 1));
     final startDate = startUtc.toIso8601String();
     final endDate = endExclusive.toIso8601String();
+    final ledgerId = await workspaceLedgerUserId();
     dynamic query = _client
         .from('transactions')
         .select(
@@ -2553,7 +2597,7 @@ class AppRepository {
           'transfer_account:accounts!transactions_transfer_account_id_fkey(name, currency_code), '
           'categories(id, name, icon, color_hex)',
         )
-        .eq('user_id', user.id)
+        .eq('user_id', ledgerId)
         .gte('transaction_date', startDate)
         .lt('transaction_date', endDate);
     query = _applyWorkspaceFilter(query, scope.organizationId);
@@ -2574,7 +2618,20 @@ class AppRepository {
 
   Future<bool> isActiveWorkspaceReadOnly() async {
     final role = (await fetchActiveWorkspaceRole()).toLowerCase().trim();
-    return role == 'viewer';
+    if (role == 'viewer') return true;
+    final orgId = await fetchActiveOrganizationId();
+    if (orgId != null) {
+      try {
+        final mode = await _client.rpc(
+          'organization_workspace_access_for_actor',
+          params: {'p_organization_id': orgId.trim()},
+        );
+        return _parseWorkspaceAccessRpc(mode) == 'read';
+      } catch (_) {
+        return false;
+      }
+    }
+    return false;
   }
 
   /// Non-null only when the active workspace is an organization.
@@ -2590,6 +2647,157 @@ class AppRepository {
       return id;
     }
     return null;
+  }
+
+  /// Workspace access for the current user: `write`, `read`, or `none`.
+  Future<String> fetchOrganizationWorkspaceAccessMode(
+    String organizationId,
+  ) async {
+    if (currentUser == null) return 'none';
+    final id = organizationId.trim();
+    if (id.isEmpty) return 'none';
+    try {
+      final mode = await _client.rpc(
+        'organization_workspace_access_for_actor',
+        params: {'p_organization_id': id},
+      );
+      final s = _parseWorkspaceAccessRpc(mode);
+      if (s.isNotEmpty) return s;
+    } catch (_) {
+      // Missing migration, offline, or PostgREST error — avoid faking 'write'.
+    }
+    return 'none';
+  }
+
+  static String _parseWorkspaceAccessRpc(dynamic mode) {
+    if (mode == null) return '';
+    final raw = mode is String ? mode : mode.toString();
+    var s = raw.toLowerCase().trim();
+    if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) {
+      s = s.substring(1, s.length - 1).toLowerCase().trim();
+    }
+    if (s == 'write' || s == 'read' || s == 'none') return s;
+    return '';
+  }
+
+  Future<List<Map<String, dynamic>>> fetchOrganizationMembers({
+    required String organizationId,
+  }) async {
+    final data = await _client
+        .from('organization_members')
+        .select('user_id, role, updated_at')
+        .eq('organization_id', organizationId);
+    final rows = List<Map<String, dynamic>>.from(data as List<dynamic>);
+    int rank(String role) {
+      final r = role.toLowerCase();
+      if (r == 'owner') return 0;
+      if (r == 'co_owner' || r == 'admin') return 1;
+      if (r == 'member') return 2;
+      return 3;
+    }
+
+    rows.sort((a, b) {
+      final c = rank((a['role'] ?? '').toString())
+          .compareTo(rank((b['role'] ?? '').toString()));
+      if (c != 0) return c;
+      return (a['user_id']?.toString() ?? '')
+          .compareTo(b['user_id']?.toString() ?? '');
+    });
+    return rows;
+  }
+
+  /// Pending, non-revoked, non-expired invitations. Empty if the user cannot
+  /// see invites (RLS: managers only).
+  Future<List<Map<String, dynamic>>> fetchOrganizationInvitations({
+    required String organizationId,
+  }) async {
+    final data = await _client
+        .from('organization_invitations')
+        .select(
+          'id, email_normalized, invite_role, expires_at, revoked_at, created_at',
+        )
+        .eq('organization_id', organizationId);
+    final rows = List<Map<String, dynamic>>.from(data as List<dynamic>);
+    final now = DateTime.now().toUtc();
+    return rows.where((row) {
+      if (row['revoked_at'] != null) return false;
+      final exp = row['expires_at'];
+      if (exp == null) return false;
+      final parsed = exp is DateTime
+          ? exp.toUtc()
+          : DateTime.tryParse(exp.toString())?.toUtc();
+      if (parsed == null || !parsed.isAfter(now)) return false;
+      return true;
+    }).toList()
+      ..sort((a, b) {
+        final ea = a['expires_at']?.toString() ?? '';
+        final eb = b['expires_at']?.toString() ?? '';
+        return ea.compareTo(eb);
+      });
+  }
+
+  Future<String> createOrganizationInvitation({
+    required String organizationId,
+    required String email,
+    String inviteRole = 'member',
+  }) async {
+    final id = await _client.rpc(
+      'create_organization_invitation',
+      params: {
+        'p_organization_id': organizationId,
+        'p_email': email.trim(),
+        'p_invite_role': inviteRole,
+      },
+    );
+    return id?.toString() ?? '';
+  }
+
+  Future<void> revokeOrganizationInvitation({
+    required String invitationId,
+  }) async {
+    await _client.rpc(
+      'revoke_organization_invitation',
+      params: {'p_invitation_id': invitationId},
+    );
+  }
+
+  Future<void> acceptOrganizationInvitation({
+    required String invitationId,
+  }) async {
+    await _client.rpc(
+      'accept_organization_invitation',
+      params: {'p_invitation_id': invitationId},
+    );
+    await _removeCachedKey(_cacheKey('workspaces'));
+    _notifyDataChanged();
+  }
+
+  Future<void> updateOrganizationMemberRole({
+    required String organizationId,
+    required String memberUserId,
+    required String newRole,
+  }) async {
+    await _client.rpc(
+      'update_organization_member_role',
+      params: {
+        'p_organization_id': organizationId,
+        'p_member_user_id': memberUserId,
+        'p_new_role': newRole,
+      },
+    );
+  }
+
+  Future<void> removeOrganizationMember({
+    required String organizationId,
+    required String memberUserId,
+  }) async {
+    await _client
+        .from('organization_members')
+        .delete()
+        .eq('organization_id', organizationId)
+        .eq('user_id', memberUserId);
+    await _removeCachedKey(_cacheKey('workspaces'));
+    _notifyDataChanged();
   }
 
   Future<void> createTransaction({
@@ -2975,10 +3183,11 @@ class AppRepository {
     final scope = await _activeWorkspaceScope();
     final key = _savingsGoalsKey(scope: scope);
     Future<List<Map<String, dynamic>>> network() async {
+      final ledgerId = await workspaceLedgerUserId();
       dynamic query = _client
           .from('savings_goals')
           .select()
-          .eq('user_id', user.id);
+          .eq('user_id', ledgerId);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query.order('created_at', ascending: false);
       return List<Map<String, dynamic>>.from(data);
@@ -3055,10 +3264,11 @@ class AppRepository {
   }) async {
     final user = currentUser;
     if (user == null) return '';
+    final ledgerId = await workspaceLedgerUserId();
     final inserted = await _client
         .from('savings_goals')
         .insert({
-          'user_id': user.id,
+          'user_id': ledgerId,
           'organization_id': organizationId,
           'name': name,
           'target_amount': targetAmount,
@@ -3372,8 +3582,9 @@ class AppRepository {
   }) async {
     final user = currentUser;
     if (user == null) return;
+    final ledgerId = await workspaceLedgerUserId();
     await _client.from('budgets').upsert({
-      'user_id': user.id,
+      'user_id': ledgerId,
       'organization_id': organizationId,
       'category_id': categoryId,
       'month_start': monthStart.toIso8601String().split('T').first,
@@ -3393,10 +3604,11 @@ class AppRepository {
         .first;
     final key = _budgetsMonthCacheKey(monthStart, scope: scope);
     Future<List<Map<String, dynamic>>> network() async {
+      final ledgerId = await workspaceLedgerUserId();
       dynamic query = _client
           .from('budgets')
           .select('*, categories(name)')
-          .eq('user_id', user.id)
+          .eq('user_id', ledgerId)
           .eq('month_start', normalized);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query;
@@ -3424,10 +3636,11 @@ class AppRepository {
     final user = currentUser;
     if (user == null) return [];
     final scope = await _activeWorkspaceScope();
+    final ledgerId = await workspaceLedgerUserId();
     dynamic query = _client
         .from('recurring_transactions')
         .select('*, accounts(name, currency_code), categories(name)')
-        .eq('user_id', user.id);
+        .eq('user_id', ledgerId);
     query = _applyWorkspaceFilter(query, scope.organizationId);
     final data = await query.order('next_run_date');
     return List<Map<String, dynamic>>.from(data);
@@ -3445,8 +3658,9 @@ class AppRepository {
     final user = currentUser;
     if (user == null) return;
     final scope = await _activeWorkspaceScope();
+    final ledgerId = await workspaceLedgerUserId();
     await _client.from('recurring_transactions').insert({
-      'user_id': user.id,
+      'user_id': ledgerId,
       'organization_id': scope.organizationId,
       'account_id': accountId,
       'category_id': categoryId,
@@ -3466,11 +3680,12 @@ class AppRepository {
     final user = currentUser;
     if (user == null) return;
     final scope = await _activeWorkspaceScope();
+    final ledgerId = await workspaceLedgerUserId();
     dynamic query = _client
         .from('recurring_transactions')
         .update({'is_active': isActive})
         .eq('id', recurringId)
-        .eq('user_id', user.id);
+        .eq('user_id', ledgerId);
     query = _applyWorkspaceFilter(query, scope.organizationId);
     await query;
   }
@@ -3492,10 +3707,11 @@ class AppRepository {
     final user = currentUser;
     if (user == null) return [];
     final scope = await _activeWorkspaceScope();
+    final ledgerId = await workspaceLedgerUserId();
     dynamic query = _client
         .from('bill_reminders')
         .select('*, accounts(name, currency_code), categories(name)')
-        .eq('user_id', user.id);
+        .eq('user_id', ledgerId);
     query = _applyWorkspaceFilter(query, scope.organizationId);
     final data = await query.order('due_date');
     return List<Map<String, dynamic>>.from(data);
@@ -3512,8 +3728,9 @@ class AppRepository {
     final user = currentUser;
     if (user == null) return;
     final scope = await _activeWorkspaceScope();
+    final ledgerId = await workspaceLedgerUserId();
     await _client.from('bill_reminders').insert({
-      'user_id': user.id,
+      'user_id': ledgerId,
       'organization_id': scope.organizationId,
       'title': title,
       'amount': amount,
@@ -3648,10 +3865,11 @@ class AppRepository {
     final scope = await _activeWorkspaceScope();
     final key = _savingsGoalContributionsKey(scope: scope);
     Future<List<Map<String, dynamic>>> network() async {
+      final ledgerId = await workspaceLedgerUserId();
       dynamic query = _client
           .from('savings_goal_contributions')
           .select()
-          .eq('user_id', user.id);
+          .eq('user_id', ledgerId);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query
           .order('created_at', ascending: false)
@@ -3683,8 +3901,9 @@ class AppRepository {
     final scope = await _activeWorkspaceScope();
     final key = _loansKey(scope: scope);
     Future<List<Map<String, dynamic>>> network() async {
+      final ledgerId = await workspaceLedgerUserId();
       dynamic query =
-          _client.from('loans').select().eq('user_id', user.id);
+          _client.from('loans').select().eq('user_id', ledgerId);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query.order('created_at', ascending: false);
       return List<Map<String, dynamic>>.from(data);
@@ -3714,10 +3933,11 @@ class AppRepository {
     final scope = await _activeWorkspaceScope();
     final key = _loanPaymentsKey(scope: scope);
     Future<List<Map<String, dynamic>>> network() async {
+      final ledgerId = await workspaceLedgerUserId();
       dynamic query = _client
           .from('loan_payments')
           .select()
-          .eq('user_id', user.id);
+          .eq('user_id', ledgerId);
       query = _applyWorkspaceFilter(query, scope.organizationId);
       final data = await query
           .order('payment_date', ascending: false)
@@ -3759,6 +3979,7 @@ class AppRepository {
     final accountsKey = _accountsKey(scope: scope);
     final transactionsKey = _transactionsKey(scope: scope);
     final localId = _newLocalId('loan');
+    final ledgerId = await workspaceLedgerUserId();
     final trimmedNote = note?.trim().isEmpty == true ? null : note?.trim();
     final person = personName.trim();
     if (direction == 'owed_to_me') {
@@ -3828,7 +4049,7 @@ class AppRepository {
       final cached = await _readCachedList(loansKey);
       cached.insert(0, {
         'id': localId,
-        'user_id': user.id,
+        'user_id': ledgerId,
         'organization_id': scope.organizationId,
         'person_name': person,
         'total_amount': totalAmount,
@@ -3861,7 +4082,7 @@ class AppRepository {
       final principalTxDate = DateTime.now();
       transactions.insert(0, {
         'id': _newLocalId('loan_principal_tx'),
-        'user_id': user.id,
+        'user_id': ledgerId,
         'organization_id': scope.organizationId,
         'account_id': principalAccountId,
         'category_id': null,
@@ -3974,9 +4195,10 @@ class AppRepository {
       );
       final payments = await _readCachedList(loanPaymentsKey);
       final paymentLocalId = _newLocalId('loan_payment');
+      final ledgerId = await workspaceLedgerUserId();
       payments.insert(0, {
         'id': paymentLocalId,
-        'user_id': user.id,
+        'user_id': ledgerId,
         'organization_id': scope.organizationId,
         'loan_id': loanId,
         'account_id': accountId,
@@ -4000,7 +4222,7 @@ class AppRepository {
       final transactions = await _readCachedList(transactionsKey);
       transactions.insert(0, {
         'id': _newLocalId('loan_tx'),
-        'user_id': user.id,
+        'user_id': ledgerId,
         'organization_id': scope.organizationId,
         'account_id': accountId,
         'category_id': null,

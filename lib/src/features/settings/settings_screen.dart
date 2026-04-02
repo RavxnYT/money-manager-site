@@ -16,6 +16,8 @@ import '../finance_insights/finance_insights_screen.dart';
 import '../categories/categories_screen.dart';
 import '../security/security_screen.dart';
 import 'business_mode_flow.dart';
+import 'join_business_invite_screen.dart';
+import 'team_screen.dart';
 import 'workspaces_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -36,6 +38,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _supportCountTotal = 0;
   BusinessAccessState _businessAccess = const BusinessAccessState();
   String _activeWorkspaceLabel = 'Personal';
+  String? _activeOrganizationId;
+  String? _activeOrganizationRole;
+  String? _activeOrganizationOwnerUserId;
 
   @override
   void initState() {
@@ -52,6 +57,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ? {'today': 0, 'total': 0}
         : await widget.repository.fetchSupportStats();
     var activeWorkspaceLabel = 'Personal';
+    String? activeOrganizationId;
+    String? activeOrganizationRole;
+    String? activeOrganizationOwnerUserId;
     try {
       if (BusinessFeaturesConfig.isEnabled) {
         final workspaces = await widget.repository.fetchWorkspaces();
@@ -62,6 +70,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 );
         activeWorkspaceLabel =
             (activeWorkspace?['label'] ?? 'Personal').toString();
+        if (activeWorkspace != null &&
+            (activeWorkspace['kind'] ?? '').toString().toLowerCase() ==
+                'organization') {
+          activeOrganizationId =
+              activeWorkspace['organization_id']?.toString();
+          activeOrganizationRole =
+              (activeWorkspace['role'] ?? 'member').toString();
+          activeOrganizationOwnerUserId =
+              activeWorkspace['owner_user_id']?.toString();
+        }
       }
     } catch (error) {
       if (!mounted) return;
@@ -77,6 +95,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _supportCountTotal = supportStats['total'] ?? 0;
       _businessAccess = businessAccess;
       _activeWorkspaceLabel = activeWorkspaceLabel;
+      _activeOrganizationId = activeOrganizationId;
+      _activeOrganizationRole = activeOrganizationRole;
+      _activeOrganizationOwnerUserId = activeOrganizationOwnerUserId;
     });
     if (!businessAccess.shouldHideSupportAd) {
       SupportRewardedAdService.instance.load();
@@ -482,6 +503,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 10),
         if (BusinessFeaturesConfig.isEnabled)
           _buildBusinessAccessCard(context),
+        if (BusinessFeaturesConfig.isEnabled)
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.how_to_reg_outlined),
+              title: const Text('Join a business'),
+              subtitle: const Text(
+                'Paste an invitation ID — no subscription needed on your account',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<bool>(
+                    builder: (_) => JoinBusinessInviteScreen(
+                      repository: widget.repository,
+                    ),
+                  ),
+                ).then((joined) {
+                  if (joined == true) _loadSettingsData();
+                });
+              },
+            ),
+          ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.currency_exchange_outlined),
@@ -573,6 +616,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   MaterialPageRoute(
                     builder: (_) => _businessChromeScoped(
                       WorkspacesScreen(repository: widget.repository),
+                    ),
+                  ),
+                ).then((_) => _loadSettingsData());
+              },
+            ),
+          ),
+        if (BusinessFeaturesConfig.isEnabled &&
+            _businessAccess.entitlementActive &&
+            _activeOrganizationId != null)
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.group_outlined),
+              title: const Text('Team'),
+              subtitle: const Text(
+                'Members and invitations for this business',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                final id = _activeOrganizationId;
+                if (id == null) return;
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => _businessChromeScoped(
+                      TeamScreen(
+                        repository: widget.repository,
+                        organizationId: id,
+                        organizationLabel: _activeWorkspaceLabel,
+                        actorRole: _activeOrganizationRole ?? 'member',
+                        ownerUserId: _activeOrganizationOwnerUserId,
+                      ),
                     ),
                   ),
                 ).then((_) => _loadSettingsData());

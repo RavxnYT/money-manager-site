@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../core/billing/business_access.dart';
+import '../../core/config/business_features_config.dart';
 import '../../core/friendly_error.dart';
 import '../../core/ui/app_alert_dialog.dart';
 import '../../core/ui/app_page_scaffold.dart';
 import '../../core/ui/glass_panel.dart';
 import '../../data/app_repository.dart';
 import 'business_mode_flow.dart';
+import 'team_screen.dart';
 
 class WorkspacesScreen extends StatefulWidget {
   const WorkspacesScreen({
@@ -28,11 +30,18 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
   _WorkspaceScreenData? _data;
   List<Map<String, dynamic>> _localOrgs = [];
   bool _busy = false;
+  final TextEditingController _inviteIdController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _reload();
+  }
+
+  @override
+  void dispose() {
+    _inviteIdController.dispose();
+    super.dispose();
   }
 
   Future<_WorkspaceScreenData> _loadData() async {
@@ -176,9 +185,57 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
     }
   }
 
-  bool _canManageOrganization(Map<String, dynamic> workspace) {
+  bool _canManageAsOwner(Map<String, dynamic> workspace) {
     final role = (workspace['role'] ?? '').toString().toLowerCase();
     return role == 'owner';
+  }
+
+  bool _canCoManageOrganization(Map<String, dynamic> workspace) {
+    final role = (workspace['role'] ?? '').toString().toLowerCase();
+    return role == 'owner' || role == 'co_owner' || role == 'admin';
+  }
+
+  void _openTeam(Map<String, dynamic> workspace) {
+    final organizationId = workspace['organization_id']?.toString();
+    if (organizationId == null || organizationId.isEmpty) return;
+    Navigator.of(context)
+        .push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => TeamScreen(
+              repository: widget.repository,
+              organizationId: organizationId,
+              organizationLabel:
+                  (workspace['label'] ?? 'Business').toString(),
+              actorRole: (workspace['role'] ?? 'member').toString(),
+              ownerUserId: workspace['owner_user_id']?.toString(),
+            ),
+          ),
+        )
+        .then((_) => _reload());
+  }
+
+  Future<void> _acceptInvitationWithId() async {
+    final raw = _inviteIdController.text.trim();
+    if (raw.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      await widget.repository.acceptOrganizationInvitation(
+        invitationId: raw,
+      );
+      if (!mounted) return;
+      _inviteIdController.clear();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You joined the business workspace.')),
+      );
+      await _reload();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(friendlyErrorMessage(error))),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _renameOrganization(Map<String, dynamic> workspace) async {
@@ -360,14 +417,15 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
     final isActive = (workspace['is_active'] as bool?) ?? false;
     final role = (workspace['role'] ?? 'owner').toString();
     final locked = !entitled;
-    final canManage = entitled && _canManageOrganization(workspace);
+    final canCoManage = entitled && _canCoManageOrganization(workspace);
+    final canDeleteOrg = entitled && _canManageAsOwner(workspace);
     final orgKey = workspace['organization_id']?.toString() ?? '$reorderIndex';
 
     return GlassPanel(
       key: ValueKey(orgKey),
       margin: const EdgeInsets.symmetric(vertical: 6),
       child: ListTile(
-        leading: showDragHandle && canManage && !locked
+        leading: showDragHandle && canCoManage && !locked
             ? ReorderableDragStartListener(
                 index: reorderIndex,
                 child: const Icon(Icons.drag_handle_rounded),
@@ -380,32 +438,44 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (canManage && !locked)
+            if (entitled && !locked)
               PopupMenuButton<String>(
                 onSelected: (value) {
-                  if (value == 'rename') {
+                  if (value == 'team') {
+                    _openTeam(workspace);
+                  } else if (value == 'rename') {
                     _renameOrganization(workspace);
                   } else if (value == 'delete') {
                     _confirmDeleteOrganization(workspace);
                   }
                 },
-                itemBuilder: (context) => const [
-                  PopupMenuItem(
-                    value: 'rename',
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: 'team',
                     child: ListTile(
-                      leading: Icon(Icons.edit_outlined),
-                      title: Text('Rename'),
+                      leading: Icon(Icons.group_outlined),
+                      title: Text('Team'),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
-                  PopupMenuItem(
-                    value: 'delete',
-                    child: ListTile(
-                      leading: Icon(Icons.delete_outline),
-                      title: Text('Delete'),
-                      contentPadding: EdgeInsets.zero,
+                  if (canCoManage)
+                    const PopupMenuItem(
+                      value: 'rename',
+                      child: ListTile(
+                        leading: Icon(Icons.edit_outlined),
+                        title: Text('Rename'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
                     ),
-                  ),
+                  if (canDeleteOrg)
+                    const PopupMenuItem(
+                      value: 'delete',
+                      child: ListTile(
+                        leading: Icon(Icons.delete_outline),
+                        title: Text('Delete business'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
                 ],
               ),
             if (isActive)
@@ -592,6 +662,48 @@ class _WorkspacesScreenState extends State<WorkspacesScreen> {
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.78),
                 ),
+              ),
+            ),
+          ),
+        ],
+        if (BusinessFeaturesConfig.isEnabled) ...[
+          const SizedBox(height: 24),
+          Text(
+            'Invitation',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          GlassPanel(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Paste an invite ID to join a business. Your account email must match the invitation.',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.78),
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _inviteIdController,
+                    decoration: const InputDecoration(
+                      labelText: 'Invite ID',
+                      hintText: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+                    ),
+                    autocorrect: false,
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: _busy ? null : _acceptInvitationWithId,
+                      child: const Text('Accept invitation'),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
